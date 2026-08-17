@@ -1,0 +1,16 @@
+{
+  "name": "Daniel Skin Care",
+  "short_name": "Daniel",
+  "description": "ניהול קליניקת קוסמטיקה — תורים ועסק",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F1",
+  "theme_color": "#FAF7F1",
+  "icons": [
+    { "src": "/logo.png", "sizes": "256x256", "type": "image/png", "purpose": "any" },
+    { "src": "/logo.png", "sizes": "256x256", "type": "image/png", "purpose": "maskable" },
+    { "src": "/leaf.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

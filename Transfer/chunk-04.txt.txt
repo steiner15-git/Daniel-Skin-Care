@@ -1,0 +1,1582 @@
+### DSC-TRANSFER 4/7 ###
+ch }));
+  }
+
+  function pickClient(c) {
+    set({
+      mode: "existing",
+      clientId: c.id,
+      clientName: fullName(c),
+      email: c.email || "",
+      sendInvite: !!c.emailInvite, // ברירת מחדל מפרופיל הלקוחה
+      chargeFromPackage: false,
+      clientPackageId: "",
+    });
+    setClientQuery("");
+  }
+
+  function pickTreatment(tid) {
+    const t = treatments.find((x) => x.id === tid);
+    set({
+      treatmentId: tid,
+      treatmentName: t?.name || "",
+      price: t?.price ?? "",
+      durationMin: t?.durationMin || form.durationMin,
+      chargeFromPackage: false,
+      clientPackageId: "",
+    });
+  }
+
+  const matchingPackages = useMemo(() => {
+    if (form.mode !== "existing" || !form.clientId || !form.treatmentId) return [];
+    const t0 = new Date();
+    t0.setHours(0, 0, 0, 0);
+    return packages.filter(
+      (p) =>
+        p.clientId === form.clientId &&
+        ((p.treatmentIds || []).includes(form.treatmentId) ||
+          p.treatmentId === form.treatmentId) &&
+        p.status === "active" &&
+        (p.remainingSessions ?? 0) > 0 &&
+        (!p.expiryDate || new Date(p.expiryDate) >= t0)
+    );
+  }, [packages, form.mode, form.clientId, form.treatmentId]);
+
+  const start = combine(form.date, form.time);
+  const isPast = new Date(start).getTime() < Date.now();
+
+  // אזהרת התנגשות (לא חוסמת) — כוללת תורים ואירועים החוסמים זמן ביומן
+  const conflict = useMemo(() => {
+    const apptConflict = appts.some(
+      (a) =>
+        a.id !== id &&
+        a.status !== "cancelled" &&
+        overlaps(start, form.durationMin, a.start, a.durationMin)
+    );
+    const eventConflict = events.some((e) =>
+      overlaps(start, form.durationMin, e.start, e.durationMin)
+    );
+    return apptConflict || eventConflict;
+  }, [appts, events, start, form.durationMin, id]);
+
+  // אזהרת שעות פעילות (לא חוסמת)
+  const hoursWarning = useMemo(() => {
+    const wd = weekday(start);
+    const day = hoursDoc?.days?.[wd];
+    if (!day) return null;
+    if (!day.enabled) return `יום ${DAY_NAMES[wd]} מוגדר כסגור.`;
+    if (form.time < day.start || form.time > day.end)
+      return `מחוץ לשעות הפעילות (${day.start}–${day.end}).`;
+    return null;
+  }, [hoursDoc, start, form.time]);
+
+  const filteredClients = useMemo(() => {
+    const term = clientQuery.trim();
+    if (!term) return [];
+    return clients
+      .filter((c) => !c.archived && fullName(c).includes(term))
+      .slice(0, 6);
+  }, [clients, clientQuery]);
+
+  const newName = `${form.firstName} ${form.lastName}`.trim();
+  const canSave =
+    form.treatmentName &&
+    ((form.mode === "existing" && form.clientId) ||
+      (form.mode === "new" && form.firstName.trim()));
+
+  async function save() {
+    setSaving(true);
+    const chargingPkg =
+      form.mode === "existing" && form.chargeFromPackage && !!form.clientPackageId;
+    const payload = {
+      clientId: form.mode === "existing" ? form.clientId : null,
+      clientName: form.mode === "existing" ? form.clientName.trim() : newName,
+      phone: form.mode === "existing" ? undefined : form.phone,
+      email: form.email,
+      treatmentId: form.treatmentId,
+      treatmentName: form.treatmentName,
+      price: chargingPkg ? 0 : Number(form.price) || 0,
+      start,
+      durationMin: Number(form.durationMin) || 0,
+      sendInvite: form.sendInvite,
+      status: editing?.status || "scheduled",
+      clientPackageId: chargingPkg ? form.clientPackageId : null,
+    };
+    let apptId = id;
+    if (isEdit) await repo.update(id, payload);
+    else apptId = await repo.add({ ...payload, inviteSent: false });
+
+    if (form.sendInvite)
+      navigate(`/appointments/${apptId}/send`, {
+        replace: true,
+        state: { from: isEdit ? "calendar" : "appointments" },
+      });
+    else navigate("/calendar", { replace: true });
+  }
+
+  if (isEdit && !editing)
+    return (
+      <>
+        <ScreenHeader title="עריכת תור" />
+        <div className="empty-state">התור לא נמצא.</div>
+      </>
+    );
+
+  if (locked)
+    return (
+      <>
+        <ScreenHeader
+          title="עריכת תור"
+          action={
+            <button className="btn btn--ghost" onClick={() => navigate(-1)}>
+              חזרה
+            </button>
+          }
+        />
+        <div className="notice" style={{ marginTop: 0 }}>
+          {editing?.chargedFromPackage
+            ? "התור כבר נסגר וחויב מחבילה — עריכת התור נעולה. שינויי מפגשים נעשים דרך עריכת החבילה בכרטיסיית הלקוחה."
+            : "התור כבר נסגר (יש הכנסה משויכת) — עריכת התור נעולה. שינויים נעשים דרך עריכת ההכנסה."}
+        </div>
+      </>
+    );
+
+  return (
+    <>
+      <ScreenHeader
+        title={isEdit ? "עריכת תור" : "תיאום תור"}
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate(isEdit ? -1 : "/calendar")}>
+            {isEdit ? "חזרה" : "ליומן"}
+          </button>
+        }
+      />
+
+      {/* בחירת לקוחה */}
+      <div className="card">
+        <div className="seg">
+          <button
+            className={"seg__btn" + (form.mode === "existing" ? " on" : "")}
+            onClick={() => set({ mode: "existing" })}
+          >
+            לקוחה קיימת
+          </button>
+          <button
+            className={"seg__btn" + (form.mode === "new" ? " on" : "")}
+            onClick={() =>
+              set({
+                mode: "new",
+                clientId: "",
+                sendInvite: false,
+                chargeFromPackage: false,
+                clientPackageId: "",
+              })
+            }
+          >
+            לקוחה חדשה
+          </button>
+        </div>
+
+        {form.mode === "existing" ? (
+          <>
+            {form.clientId ? (
+              <div className="picked">
+                <span>
+                  <strong>{form.clientName}</strong>
+                  {form.email && (
+                    <span className="muted" dir="ltr" style={{ marginInlineStart: 8 }}>
+                      {form.email}
+                    </span>
+                  )}
+                </span>
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => set({ clientId: "", clientName: "", email: "" })}
+                >
+                  שינוי
+                </button>
+              </div>
+            ) : (
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>חיפוש לקוחה</label>
+                <input
+                  placeholder="שם הלקוחה"
+                  value={clientQuery}
+                  onChange={(e) => setClientQuery(e.target.value)}
+                />
+                {filteredClients.length > 0 && (
+                  <div className="suggest">
+                    {filteredClients.map((c) => (
+                      <button key={c.id} className="suggest__item" onClick={() => pickClient(c)}>
+                        {fullName(c)}{" "}
+                        {c.phone && <span className="muted" dir="ltr">{c.phone}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="row-2">
+              <div className="field">
+                <label>שם פרטי</label>
+                <input
+                  value={form.firstName}
+                  onChange={(e) => set({ firstName: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>שם משפחה</label>
+                <input
+                  value={form.lastName}
+                  onChange={(e) => set({ lastName: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="row-2" style={{ marginBottom: 0 }}>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>טלפון</label>
+                <input
+                  type="tel"
+                  dir="ltr"
+                  value={form.phone}
+                  onChange={(e) => set({ phone: e.target.value })}
+                />
+              </div>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>אימייל (לזימון)</label>
+                <input
+                  type="email"
+                  dir="ltr"
+                  value={form.email}
+                  onChange={(e) => set({ email: e.target.value })}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* טיפול */}
+      <div className="card">
+        <div className="field">
+          <label>טיפול</label>
+          {treatments.length === 0 ? (
+            <p className="warn-text" style={{ marginTop: 0 }}>
+              אין טיפולים מוגדרים. הוסיפי ברשימת הטיפולים בהגדרות.
+            </p>
+          ) : (
+            <select value={form.treatmentId} onChange={(e) => pickTreatment(e.target.value)}>
+              <option value="">— בחרי טיפול —</option>
+              {treatments.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label>מחיר (₪) — ניתן לעריכה</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={form.price}
+            onChange={(e) => set({ price: e.target.value })}
+          />
+        </div>
+      </div>
+
+      {/* חיוב מחבילה — רק אם יש חבילה פעילה תואמת */}
+      {matchingPackages.length > 0 && (
+        <div className="card">
+          <label className="inline-check">
+            <input
+              type="checkbox"
+              checked={form.chargeFromPackage}
+              onChange={(e) =>
+                set({
+                  chargeFromPackage: e.target.checked,
+                  clientPackageId: e.target.checked
+                    ? form.clientPackageId || matchingPackages[0].id
+                    : "",
+                })
+              }
+            />
+            <span>חיוב מחבילה קיימת (לא ייווצר תשלום חדש)</span>
+          </label>
+          {form.chargeFromPackage && matchingPackages.length > 1 && (
+            <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+              <label>בחירת חבילה</label>
+              <select
+                value={form.clientPackageId}
+                onChange={(e) => set({ clientPackageId: e.target.value })}
+              >
+                {matchingPackages.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.seriesName} · נותרו {p.remainingSessions}/{p.totalSessions}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {form.chargeFromPackage && matchingPackages.length === 1 && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              {matchingPackages[0].seriesName} · נותרו {matchingPackages[0].remainingSessions}/
+              {matchingPackages[0].totalSessions}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* תאריך / שעה / משך — כל אחד בשורה נפרדת */}
+      <div className="card">
+        <div className="field">
+          <label>תאריך</label>
+          <input type="date" value={form.date} onChange={(e) => set({ date: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>שעה</label>
+          <TimeField value={form.time} onChange={(time) => set({ time })} />
+        </div>
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label>משך (דקות)</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={form.durationMin}
+            onChange={(e) => set({ durationMin: e.target.value })}
+          />
+        </div>
+
+        {isPast && <p className="warn-text">⚠ מועד התור כבר עבר (ניתן להמשיך).</p>}
+        {conflict && <p className="warn-text">⚠ קיים תור או אירוע חופף בזמן זה (ניתן להמשיך).</p>}
+        {hoursWarning && <p className="warn-text">⚠ {hoursWarning} (ניתן להמשיך).</p>}
+      </div>
+
+      {/* זימון */}
+      <label className="inline-check" style={{ padding: "4px 2px" }}>
+        <input
+          type="checkbox"
+          checked={form.sendInvite}
+          onChange={(e) => set({ sendInvite: e.target.checked })}
+        />
+        <span>שליחת זימון במייל ללקוחה</span>
+      </label>
+
+      <div className="save-row">
+        <button className="btn" disabled={!canSave || saving} onClick={save}>
+          {saving ? "שומרת…" : form.sendInvite ? "שמירה והמשך לזימון →" : "שמירת התור"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/appointments/CloseAppointment.jsx @@@@@
+import { useState } from "react";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { formatDateTime } from "../../utils/datetime";
+import { formatILS } from "../../utils/money";
+
+function todayInput() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+export default function CloseAppointment() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const backTo = location.state?.from === "dashboard" ? "/" : "/calendar";
+  const { items: appts, loading } = useCollectionData("appointments");
+  const { items: packages } = useCollectionData("clientPackages");
+  const apptRepo = useRepo("appointments");
+  const incomeRepo = useRepo("income");
+  const packageRepo = useRepo("clientPackages");
+  const { data: pmDoc } = useSettingDoc("paymentMethods");
+  const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+  const log = useAuditLog();
+
+  const appt = appts.find((a) => a.id === id);
+  const [amount, setAmount] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [date, setDate] = useState(todayInput());
+  const [paid, setPaid] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  if (loading) return <p className="muted">טוען…</p>;
+  if (!appt)
+    return (
+      <>
+        <ScreenHeader title="אישור ביצוע" />
+        <div className="empty-state">התור לא נמצא.</div>
+      </>
+    );
+
+  const amountVal = amount == null ? appt.price ?? 0 : amount;
+
+  const pkg = appt.clientPackageId ? packages.find((p) => p.id === appt.clientPackageId) : null;
+  const t0 = new Date();
+  t0.setHours(0, 0, 0, 0);
+  const pkgChargeable =
+    pkg &&
+    pkg.status === "active" &&
+    (pkg.remainingSessions ?? 0) > 0 &&
+    (!pkg.expiryDate || new Date(pkg.expiryDate) >= t0);
+
+  async function confirmFromPackage() {
+    setSaving(true);
+    const remaining = (pkg.remainingSessions ?? 0) - 1;
+    await packageRepo.update(pkg.id, {
+      remainingSessions: remaining,
+      status: remaining <= 0 ? "used" : "active",
+    });
+    await apptRepo.update(appt.id, {
+      status: "done",
+      chargedFromPackage: true,
+      clientPackageId: pkg.id,
+    });
+    await log({
+      action: "package_charge",
+      entity: { type: "clientPackage", id: pkg.id, desc: `${appt.clientName} — ${pkg.seriesName}` },
+      before: { remainingSessions: pkg.remainingSessions },
+      after: { remainingSessions: remaining },
+    });
+    navigate(backTo);
+  }
+
+  async function confirmDone() {
+    setSaving(true);
+    const incomeId = await incomeRepo.add({
+      source: "appointment",
+      appointmentId: appt.id,
+      clientName: appt.clientName || "",
+      treatmentName: appt.treatmentName || "",
+      amount: Number(amountVal) || 0,
+      date,
+      invoiceNumber: "",
+      paymentMethod,
+      paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
+    });
+    await apptRepo.update(appt.id, {
+      status: "done",
+      incomeId,
+      paymentMethod,
+      // החבילה פקעה/נגמרה — התור חויב רגיל, מנתקים את הקישור לחבילה
+      clientPackageId: null,
+      chargedFromPackage: false,
+    });
+    navigate(backTo);
+  }
+
+  async function cancelAppt() {
+    if (!confirm("לבטל את התור? לא תיווצר הכנסה (למשל: הלקוחה לא הגיעה).")) return;
+    await apptRepo.update(appt.id, { status: "cancelled" });
+    navigate(backTo);
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title="אישור ביצוע"
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate(backTo)}>
+            חזרה
+          </button>
+        }
+      />
+
+      <div className="card">
+        <div className="read-row">
+          <span className="muted">לקוחה</span>
+          <span>{appt.clientName}</span>
+        </div>
+        <div className="read-row">
+          <span className="muted">טיפול</span>
+          <span>{appt.treatmentName}</span>
+        </div>
+        <div className="read-row">
+          <span className="muted">מועד</span>
+          <span>{formatDateTime(appt.start)}</span>
+        </div>
+      </div>
+
+      {pkgChargeable ? (
+        <>
+          <div className="notice" style={{ marginTop: 0 }}>
+            תור זה מחויב מחבילה: <strong>{pkg.seriesName}</strong> — נותרו{" "}
+            {pkg.remainingSessions}/{pkg.totalSessions} מפגשים. אישור הביצוע ינכה מפגש אחד
+            ולא ייצור הכנסה חדשה.
+          </div>
+          <div className="save-row" style={{ justifyContent: "space-between" }}>
+            <button className="btn btn--danger" onClick={cancelAppt}>
+              ביטול תור (לא בוצע)
+            </button>
+            <button className="btn" disabled={saving} onClick={confirmFromPackage}>
+              {saving ? "שומרת…" : "אישור וניכוי מהחבילה"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {appt.clientPackageId && (
+            <div className="notice" style={{ marginTop: 0 }}>
+              ⚠ החבילה שסומנה לתור פקעה או שנגמרו בה המפגשים — התור יחויב כתשלום רגיל.
+            </div>
+          )}
+
+          <div className="card">
+            <div className="row-2">
+              <div className="field">
+                <label>סכום שהתקבל (₪)</label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={amountVal}
+                  onChange={(e) => setAmount(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>תאריך תשלום</label>
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label>אמצעי תשלום</label>
+              <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                <option value="">— בחרי —</option>
+                {methods.map((m) => (
+                  <option key={m.id} value={m.name}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <label className="inline-check" style={{ marginTop: 14 }}>
+              <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
+              <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
+            </label>
+          </div>
+
+          <div className="notice">
+            אישור ביצוע ייצור רשומת הכנסה של {formatILS(amountVal)} המשויכת לתור. אישור התשלום
+            ("שולם") נעשה על ידך — כאן או מאוחר יותר. לאחר האישור עריכת התור תינעל.
+          </div>
+
+          <div className="save-row" style={{ justifyContent: "space-between" }}>
+            <button className="btn btn--danger" onClick={cancelAppt}>
+              ביטול תור (לא בוצע)
+            </button>
+            <button className="btn" disabled={saving || !paymentMethod} onClick={confirmDone}>
+              {saving ? "שומרת…" : "אישור ויצירת הכנסה"}
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/appointments/SendInvite.jsx @@@@@
+import { useNavigate, useParams, useLocation } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData, useRepo, useSettingDoc } from "../../data";
+import { fillTemplate, inviteTokens, mailtoUrl, gcalUrl } from "../../utils/invite";
+import { formatDateTime } from "../../utils/datetime";
+
+export default function SendInvite() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from === "appointments" ? "appointments" : "calendar";
+
+  const { items: appts, loading } = useCollectionData("appointments");
+  const repo = useRepo("appointments");
+  const { data: business } = useSettingDoc("business");
+  const { data: invitation } = useSettingDoc("invitation");
+
+  const appt = appts.find((a) => a.id === id);
+
+  function goBack() {
+    navigate(from === "appointments" ? "/appointments" : "/calendar");
+  }
+
+  if (loading) return <p className="muted">טוען…</p>;
+  if (!appt)
+    return (
+      <>
+        <ScreenHeader title="שליחת זימון" />
+        <div className="empty-state">התור לא נמצא.</div>
+      </>
+    );
+
+  const tokens = inviteTokens({ business, clientName: appt.clientName, appt });
+  const subject = fillTemplate(invitation?.subject || "זימון לתור", tokens);
+  const baseBody = fillTemplate(invitation?.body || "", tokens);
+
+  const title = `${appt.treatmentName} · ${business?.name || "קליניקה"}`;
+  const calendarLink = gcalUrl({
+    title,
+    start: appt.start,
+    durationMin: appt.durationMin,
+    details: appt.treatmentName, // ללא מחיר — פרטיות
+    location: business?.address || "",
+  });
+
+  // הקישור נכנס לגוף המייל — לחיצה אחת של הלקוחה מוסיפה את התור ליומן שלה
+  const body = `${baseBody}\n\nלהוספת התור ליומן שלך:\n${calendarLink}`;
+
+  function openMail() {
+    window.location.href = mailtoUrl(appt.email, subject, body);
+    repo.update(appt.id, { inviteSent: true });
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title="שליחת זימון"
+        action={
+          <button className="btn btn--ghost" onClick={goBack}>
+            {from === "appointments" ? "לתיאום תור" : "ליומן"}
+          </button>
+        }
+      />
+
+      <div className="card">
+        <div className="read-row">
+          <span className="muted">לקוחה</span>
+          <span>{appt.clientName}</span>
+        </div>
+        <div className="read-row">
+          <span className="muted">טיפול</span>
+          <span>{appt.treatmentName}</span>
+        </div>
+        <div className="read-row">
+          <span className="muted">מועד</span>
+          <span>{formatDateTime(appt.start)}</span>
+        </div>
+        <div className="read-row">
+          <span className="muted">אימייל</span>
+          <span dir="ltr">{appt.email || "— חסר —"}</span>
+        </div>
+      </div>
+
+      {!appt.email && (
+        <div className="warn-text" style={{ marginTop: 12 }}>
+          ⚠ ללקוחה אין אימייל. הוסיפי אימייל בכרטיסיית הלקוחה כדי לשלוח זימון.
+        </div>
+      )}
+
+      <div className="notice">
+        המייל נפתח מוכן עם קישור "הוסף ליומן Google" בתוכו — הלקוחה לוחצת עליו והתור נכנס
+        ליומן שלה. לחיצה אחת, ללא צירוף קובץ. התוכן אינו כולל מחיר, לפי עקרון הפרטיות.
+      </div>
+
+      <div className="stack">
+        <button className="btn btn--block" disabled={!appt.email} onClick={openMail}>
+          ✉ פתיחת טיוטת מייל (כולל קישור ליומן)
+        </button>
+      </div>
+
+      {appt.inviteSent && (
+        <p className="save-row__ok" style={{ textAlign: "center", marginTop: 12 }}>
+          הזימון סומן כנשלח ✓ (ניתן לשלוח שוב בכל עת)
+        </p>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/business/AuditLog.jsx @@@@@
+import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData } from "../../data";
+
+const ACTION_LABELS = {
+  income_edit: "עריכת הכנסה",
+  income_delete: "מחיקת הכנסה",
+  income_mark_paid: "סימון הכנסה כשולם",
+  income_unmark_paid: "הסרת סימון שולם",
+  expense_edit: "עריכת הוצאה",
+  expense_delete: "מחיקת הוצאה",
+  client_edit: "עריכת פרטי לקוחה",
+  client_diagnosis_edit: "עריכת אבחון עור",
+  client_archive: "העברת לקוחה לארכיון",
+  client_restore: "שחזור לקוחה מהארכיון",
+  client_delete_permanent: "מחיקת לקוחה לצמיתות",
+  series_purchase: "רכישת סדרה/חבילה",
+  product_sale: "מכירת מוצר",
+  package_charge: "חיוב תור מחבילה",
+  package_edit: "עריכת חבילת לקוחה",
+  package_delete: "מחיקת חבילת לקוחה",
+};
+
+function tsToStr(ts) {
+  if (!ts) return "";
+  // מקומי: ts הוא מספר (Date.now). בענן: Firestore Timestamp עם toDate().
+  const d = typeof ts === "number" ? new Date(ts) : ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleString("he-IL");
+}
+
+export default function AuditLog() {
+  const navigate = useNavigate();
+  const { items, loading } = useCollectionData("auditLog");
+
+  const sorted = useMemo(() => {
+    return items.slice().sort((a, b) => {
+      const ta = typeof a.ts === "number" ? a.ts : a.ts?.toDate?.().getTime?.() || 0;
+      const tb = typeof b.ts === "number" ? b.ts : b.ts?.toDate?.().getTime?.() || 0;
+      return tb - ta;
+    });
+  }, [items]);
+
+  return (
+    <>
+      <ScreenHeader
+        title="לוג שינויים"
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/settings")}>
+            חזרה
+          </button>
+        }
+      />
+
+      <div className="notice" style={{ marginTop: 0 }}>
+        תיעוד פעולות רגישות על נתונים פיננסיים ולקוחות — רשת ביטחון למעקב ולשחזור מידע.
+      </div>
+
+      {loading ? (
+        <p className="muted">טוען…</p>
+      ) : sorted.length === 0 ? (
+        <div className="empty-state">אין עדיין רשומות בלוג.</div>
+      ) : (
+        <div className="list">
+          {sorted.map((r) => (
+            <div key={r.id} className="card log-item">
+              <div className="log-item__head">
+                <strong>{ACTION_LABELS[r.action] || r.action}</strong>
+                <span className="muted">{tsToStr(r.ts)}</span>
+              </div>
+              {r.entity?.desc && <span className="muted">{r.entity.desc}</span>}
+              {(r.before || r.after) && (
+                <div className="log-item__diff">
+                  {r.before && <span>לפני: {JSON.stringify(r.before)}</span>}
+                  {r.after && <span>אחרי: {JSON.stringify(r.after)}</span>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/business/Business.jsx @@@@@
+import { useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import BarChart from "../../components/BarChart";
+import { useCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
+import { formatILS, HEB_MONTHS } from "../../utils/money";
+import { formatDate } from "../../utils/datetime";
+import { exportYearReport } from "../../utils/exportXlsx";
+import { ReceiptBadge, hasReceipt } from "../../components/ReceiptField";
+
+const CURRENT_YEAR = new Date().getFullYear();
+const CURRENT_MONTH = new Date().getMonth();
+
+export default function Business() {
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get("tab") || "summary");
+  const { items: income } = useCollectionData("income");
+  const { items: expenses } = useCollectionData("expenses");
+
+  return (
+    <>
+      <ScreenHeader title="ניהול עסק" />
+      <div className="seg" style={{ marginBottom: 16 }}>
+        <button className={"seg__btn" + (tab === "summary" ? " on" : "")} onClick={() => setTab("summary")}>
+          סיכום
+        </button>
+        <button className={"seg__btn" + (tab === "income" ? " on" : "")} onClick={() => setTab("income")}>
+          הכנסות
+        </button>
+        <button className={"seg__btn" + (tab === "expense" ? " on" : "")} onClick={() => setTab("expense")}>
+          הוצאות
+        </button>
+      </div>
+
+      {tab === "summary" && <Summary income={income} expenses={expenses} />}
+      {tab === "income" && (
+        <IncomeTab
+          income={income}
+          initialMissing={params.get("filter") === "unpaid" ? "confirmation" : ""}
+        />
+      )}
+      {tab === "expense" && <ExpenseTab expenses={expenses} />}
+    </>
+  );
+}
+
+function Summary({ income, expenses }) {
+  const [year, setYear] = useState(CURRENT_YEAR);
+  const [month, setMonth] = useState(CURRENT_MONTH);
+  const [mode, setMode] = useState("month");
+
+  const monthly = useMemo(() => {
+    const arr = Array.from({ length: 12 }, () => ({ income: 0, expense: 0 }));
+    for (const r of income) {
+      const d = new Date(r.date);
+      if (d.getFullYear() === year) arr[d.getMonth()].income += Number(r.amount) || 0;
+    }
+    for (const r of expenses) {
+      const d = new Date(r.date);
+      if (d.getFullYear() === year) arr[d.getMonth()].expense += Number(r.total) || 0;
+    }
+    return arr;
+  }, [income, expenses, year]);
+
+  const scope =
+    mode === "year"
+      ? monthly.reduce(
+          (s, m) => ({ income: s.income + m.income, expense: s.expense + m.expense }),
+          { income: 0, expense: 0 }
+        )
+      : monthly[month];
+
+  const profit = scope.income - scope.expense;
+  const chartData = monthly.map((m, i) => ({
+    label: HEB_MONTHS[i].slice(0, 3),
+    income: m.income,
+    expense: m.expense,
+  }));
+
+  return (
+    <>
+      <div className="year-nav">
+        <button className="icon-btn" onClick={() => setYear(year - 1)}>›</button>
+        <strong>{year}</strong>
+        <button className="icon-btn" onClick={() => setYear(year + 1)}>‹</button>
+      </div>
+
+      <div className="seg" style={{ marginBottom: 14 }}>
+        <button className={"seg__btn" + (mode === "month" ? " on" : "")} onClick={() => setMode("month")}>
+          חודשי
+        </button>
+        <button className={"seg__btn" + (mode === "year" ? " on" : "")} onClick={() => setMode("year")}>
+          שנתי
+        </button>
+      </div>
+
+      {mode === "month" && (
+        <div className="field">
+          <select value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+            {HEB_MONTHS.map((m, i) => (
+              <option key={i} value={i}>{m}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat stat--income">
+          <span className="muted">הכנסות</span>
+          <strong>{formatILS(scope.income)}</strong>
+        </div>
+        <div className="stat stat--expense">
+          <span className="muted">הוצאות</span>
+          <strong>{formatILS(scope.expense)}</strong>
+        </div>
+        <div className="stat stat--profit">
+          <span className="muted">רווח</span>
+          <strong>{formatILS(profit)}</strong>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <BarChart data={chartData} highlight={mode === "month" ? month : -1} />
+      </div>
+
+      <button
+        className="btn btn--ghost btn--block"
+        style={{ marginTop: 16 }}
+        onClick={() => exportYearReport(year, income, expenses)}
+      >
+        ⬇ ייצוא דוח שנתי ל-Excel ({year})
+      </button>
+    </>
+  );
+}
+
+/* ---------- הכנסות ---------- */
+function IncomeTab({ income, initialMissing = "" }) {
+  const navigate = useNavigate();
+  const repo = useRepo("income");
+  const log = useAuditLog();
+  const { data: pmDoc } = useSettingDoc("paymentMethods");
+  const methods = pmDoc?.items ?? [];
+  const [q, setQ] = useState("");
+  const [missing, setMissing] = useState(initialMissing); // "" | confirmation | invoice | both
+  const [status, setStatus] = useState(""); // "" | paid | unpaid
+  const [method, setMethod] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [receipt, setReceipt] = useState(""); // "" | with | without
+  const [sortBy, setSortBy] = useState("date");
+
+  const list = useMemo(() => {
+    let l = income.slice();
+    const term = q.trim();
+    if (term)
+      l = l.filter((r) =>
+        [r.clientName, r.treatmentName, r.note, r.invoiceNumber]
+          .filter(Boolean)
+          .some((v) => String(v).includes(term))
+      );
+    if (status === "paid") l = l.filter((r) => r.paid);
+    else if (status === "unpaid") l = l.filter((r) => !r.paid);
+    if (method) l = l.filter((r) => r.paymentMethod === method);
+    if (from) l = l.filter((r) => (r.date || "") >= from);
+    if (to) l = l.filter((r) => (r.date || "") <= to);
+    if (receipt === "with") l = l.filter(hasReceipt);
+    else if (receipt === "without") l = l.filter((r) => !hasReceipt(r));
+    if (missing === "confirmation") l = l.filter((r) => !r.paid);
+    else if (missing === "invoice") l = l.filter((r) => !r.invoiceNumber);
+    else if (missing === "both") l = l.filter((r) => !r.paid && !r.invoiceNumber);
+    l.sort((a, b) => {
+      if (sortBy === "amount") return (Number(b.amount) || 0) - (Number(a.amount) || 0);
+      if (sortBy === "method") return (a.paymentMethod || "").localeCompare(b.paymentMethod || "", "he");
+      return new Date(b.date) - new Date(a.date);
+    });
+    return l;
+  }, [income, q, status, method, from, to, receipt, missing, sortBy]);
+
+  async function togglePaid(r) {
+    const paid = !r.paid;
+    await repo.update(r.id, { paid });
+    await log({
+      action: paid ? "income_mark_paid" : "income_unmark_paid",
+      entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
+      before: { paid: r.paid },
+      after: { paid },
+    });
+  }
+
+  async function remove(r) {
+    if (r.paid) return;
+    if (!confirm("למחוק את ההכנסה?")) return;
+    await repo.remove(r.id);
+    await log({
+      action: "income_delete",
+      entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
+    });
+  }
+
+  return (
+    <>
+      <div className="toolbar">
+        <input placeholder="חיפוש (לקוחה / טיפול / חשבונית)" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="toolbar__row">
+          <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+            <label>מתאריך</label>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+            <label>עד תאריך</label>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </div>
+        <div className="toolbar__row">
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">כל הסטטוסים</option>
+            <option value="paid">שולם</option>
+            <option value="unpaid">לא שולם</option>
+          </select>
+          <select value={method} onChange={(e) => setMethod(e.target.value)}>
+            <option value="">כל אמצעי התשלום</option>
+            {methods.map((m) => (
+              <option key={m.id} value={m.name}>{m.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="toolbar__row">
+          <select value={missing} onChange={(e) => setMissing(e.target.value)}>
+            <option value="">כל ההכנסות</option>
+            <option value="confirmation">חסר אישור תשלום</option>
+            <option value="invoice">חסרה חשבונית</option>
+            <option value="both">חסרים שניהם</option>
+          </select>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="date">סדר לפי תאריך</option>
+            <option value="amount">סדר לפי סכום</option>
+            <option value="method">סדר לפי אמצעי תשלום</option>
+          </select>
+        </div>
+        <div className="toolbar__row">
+          <select value={receipt} onChange={(e) => setReceipt(e.target.value)}>
+            <option value="">תמונה: הכל</option>
+            <option value="with">עם תמונה</option>
+            <option value="without">ללא תמונה</option>
+          </select>
+        </div>
+        <button className="btn btn--block" onClick={() => navigate("/business/income/new")}>
+          + הכנסה ידנית
+        </button>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="empty-state">אין הכנסות להצגה.</div>
+      ) : (
+        <div className="list">
+          {list.map((r) => (
+            <div key={r.id} className="card fin-item">
+              <div className="fin-item__main">
+                <div className="fin-item__top">
+                  <strong>{formatILS(r.amount)}</strong>
+                  <span className={"badge " + (r.paid ? "badge--ok" : "badge--warn")}>
+                    {r.paid ? "שולם" : "לא שולם"}
+                  </span>
+                  <ReceiptBadge value={r} />
+                </div>
+                <span className="muted">
+                  {formatDate(r.date)} · {r.treatmentName || r.note || "הכנסה"}
+                  {r.clientName ? ` · ${r.clientName}` : ""}
+                </span>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {r.paymentMethod || "—"}
+                  {r.invoiceNumber ? ` · חשבונית ${r.invoiceNumber}` : " · ללא חשבונית"}
+                </span>
+              </div>
+              <div className="fin-item__actions">
+                <button className="btn btn--ghost" onClick={() => togglePaid(r)}>
+                  {r.paid ? "בטל שולם" : "סמן שולם"}
+                </button>
+                <button className="btn btn--ghost" onClick={() => navigate(`/business/income/${r.id}/edit`)}>
+                  עריכה
+                </button>
+                <button
+                  className="btn btn--muted"
+                  disabled={r.paid}
+                  title={r.paid ? "יש להסיר סימון 'שולם' לפני מחיקה" : ""}
+                  onClick={() => remove(r)}
+                >
+                  מחיקה
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 10 }}>
+        הכנסה שסומנה "שולם" אינה ניתנת למחיקה עד להסרת הסימון.
+      </p>
+    </>
+  );
+}
+
+/* ---------- הוצאות ---------- */
+function ExpenseTab({ expenses }) {
+  const navigate = useNavigate();
+  const repo = useRepo("expenses");
+  const log = useAuditLog();
+  const { data: catDoc } = useSettingDoc("expenseCategories");
+  const categories = catDoc?.items ?? [];
+  const [q, setQ] = useState("");
+  const [category, setCategory] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [receipt, setReceipt] = useState(""); // "" | with | without
+  const [sortBy, setSortBy] = useState("date");
+
+  const list = useMemo(() => {
+    let l = expenses.slice();
+    const term = q.trim();
+    if (term)
+      l = l.filter((r) =>
+        [r.description, r.businessName, r.category, r.invoiceNumber]
+          .filter(Boolean)
+          .some((v) => String(v).includes(term))
+      );
+    if (category) l = l.filter((r) => r.category === category);
+    if (from) l = l.filter((r) => (r.date || "") >= from);
+    if (to) l = l.filter((r) => (r.date || "") <= to);
+    if (receipt === "with") l = l.filter(hasReceipt);
+    else if (receipt === "without") l = l.filter((r) => !hasReceipt(r));
+    l.sort((a, b) => {
+      if (sortBy === "amount") return (Number(b.total) || 0) - (Number(a.total) || 0);
+      if (sortBy === "category") return (a.category || "").localeCompare(b.category || "", "he");
+      return new Date(b.date) - new Date(a.date);
+    });
+    return l;
+  }, [expenses, q, category, from, to, receipt, sortBy]);
+
+  async function remove(r) {
+    if (!confirm("למחוק את ההוצאה?")) return;
+    await repo.remove(r.id);
+    await log({
+      action: "expense_delete",
+      entity: { type: "expense", id: r.id, desc: `${r.description || "הוצאה"} · ${formatILS(r.total)}` },
+    });
+  }
+
+  return (
+    <>
+      <div className="toolbar">
+        <input placeholder="חיפוש (תיאור / עסק / קטגוריה)" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="toolbar__row">
+          <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+            <label>מתאריך</label>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+            <label>עד תאריך</label>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </div>
+        <div className="toolbar__row">
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">כל הקטגוריות</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="date">סדר לפי תאריך</option>
+            <option value="amount">סדר לפי סכום</option>
+            <option value="category">סדר לפי קטגוריה</option>
+          </select>
+        </div>
+        <div className="toolbar__row">
+          <select value={receipt} onChange={(e) => setReceipt(e.target.value)}>
+            <option value="">תמונה: הכל</option>
+            <option value="with">עם תמונה</option>
+            <option value="without">ללא תמונה</option>
+          </select>
+        </div>
+        <button className="btn btn--block" onClick={() => navigate("/business/expense/new")}>
+          + הוצאה
+        </button>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="empty-state">אין הוצאות להצגה.</div>
+      ) : (
+        <div className="list">
+          {list.map((r) => (
+            <div key={r.id} className="card fin-item">
+              <div className="fin-item__main">
+                <div className="fin-item__top">
+                  <strong>{formatILS(r.total)}</strong>
+                  {r.recurring && <span className="badge badge--info">קבועה · {r.recurring === "yearly" ? "שנתי" : "חודשי"}</span>}
+                  <ReceiptBadge value={r} />
+                </div>
+                <span className="muted">
+                  {formatDate(r.date)} · {r.description || "הוצאה"}
+                  {r.businessName ? ` · ${r.businessName}` : ""}
+                </span>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {r.category || "—"}
+                  {r.invoiceNumber ? ` · חשבונית ${r.invoiceNumber}` : ""}
+                </span>
+              </div>
+              <div className="fin-item__actions">
+                <button className="btn btn--ghost" onClick={() => navigate(`/business/expense/${r.id}/edit`)}>
+                  עריכה
+                </button>
+                <button className="btn btn--muted" onClick={() => remove(r)}>
+                  מחיקה
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/business/ExpenseForm.jsx @@@@@
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { formatILS } from "../../utils/money";
+import ReceiptField from "../../components/ReceiptField";
+
+function todayInput() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+export default function ExpenseForm() {
+  const { id } = useParams();
+  const isEdit = !!id;
+  const navigate = useNavigate();
+  const { items } = useCollectionData("expenses");
+  const repo = useRepo("expenses");
+  const log = useAuditLog();
+  const { data: catDoc } = useSettingDoc("expenseCategories");
+  const categories = catDoc?.items ?? [];
+
+  const editing = isEdit ? items.find((r) => r.id === id) : null;
+
+  const [form, setForm] = useState({
+    date: todayInput(),
+    description: "",
+    businessName: "",
+    invoiceNumber: "",
+    amountBeforeVat: "",
+    vat: "",
+    total: "",
+    category: "",
+    recurring: "", // "" | "monthly" | "yearly"
+    receiptData: null,
+    receiptFileId: null,
+    receiptMime: null,
+  });
+  const [autoTotal, setAutoTotal] = useState(true);
+
+  useEffect(() => {
+    if (editing) {
+      setForm({ ...form, ...editing });
+      setAutoTotal(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing?.id]);
+
+  function set(patch) {
+    setForm((f) => {
+      const next = { ...f, ...patch };
+      if (autoTotal && (patch.amountBeforeVat != null || patch.vat != null)) {
+        next.total = String((Number(next.amountBeforeVat) || 0) + (Number(next.vat) || 0));
+      }
+      return next;
+    });
+  }
+
+  async function save() {
+    const payload = {
+      date: form.date,
+      description: form.description.trim(),
+      businessName: form.businessName.trim(),
+      invoiceNumber: form.invoiceNumber.trim(),
+      amountBeforeVat: Number(form.amountBeforeVat) || 0,
+      vat: Number(form.vat) || 0,
+      total: Number(form.total) || 0,
+      category: form.category,
+      recurring: form.recurring || null,
+      receiptData: form.receiptData || null,
+      receiptFileId: form.receiptFileId || null,
+      receiptMime: form.receiptMime || null,
+    };
+    if (isEdit) {
+      await repo.update(id, payload);
+      await log({
+        action: "expense_edit",
+        entity: { type: "expense", id, desc: `${payload.description || "הוצאה"} · ${formatILS(payload.total)}` },
+        before: { total: editing.total },
+        after: { total: payload.total },
+      });
+    } else {
+      await repo.add(payload);
+    }
+    navigate("/business");
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title={isEdit ? "עריכת הוצאה" : "הוצאה חדשה"}
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/business")}>
+            חזרה
+          </button>
+        }
+      />
+
+      <div className="card">
+        {/* סדר שדות: תאריך, תיאור, שם עסק (דרישת PRD) */}
+        <div className="field">
+          <label>תאריך</label>
+          <input type="date" value={form.date} onChange={(e) => set({ date: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>תיאור</label>
+          <input value={form.description} onChange={(e) => set({ description: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>שם העסק</label>
+          <input value={form.businessName} onChange={(e) => set({ businessName: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>מספר חשבונית</label>
+          <input dir="ltr" value={form.invoiceNumber} onChange={(e) => set({ invoiceNumber: e.target.value })} />
+        </div>
+
+        <div className="row-2">
+          <div className="field">
+            <label>מחיר לפני מע"מ</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={form.amountBeforeVat}
+              onChange={(e) => set({ amountBeforeVat: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>מע"מ</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={form.vat}
+              onChange={(e) => set({ vat: e.target.value })}
+            />
+          </div>
+        </div>
+        <div className="field">
+          <label>סה"כ כולל מע"מ</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={form.total}
+            onChange={(e) => {
+              setAutoTotal(false);
+              set({ total: e.target.value });
+            }}
+          />
+        </div>
+
+        <div className="field">
+          <label>קטגוריה</label>
+          <select value={form.category} onChange={(e) => set({ category: e.target.value })}>
+            <option value="">— בחרי —</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label>הוצאה קבועה</label>
+          <select value={form.recurring} onChange={(e) => set({ recurring: e.target.value })}>
+            <option value="">לא קבועה</option>
+            <option value="monthly">חודשית</option>
+            <option value="yearly">שנתית</option>
+          </select>
+        </div>
+
+        <ReceiptField value={form} onChange={set} />
+      </div>
+
+      <div className="save-row">
+        <button className="btn" disabled={!form.total && !form.amountBeforeVat} onClick={save}>
+          {isEdit ? "אישור שמירה" : "הוספת הוצאה"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/business/IncomeForm.jsx @@@@@
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { formatILS } from "../../utils/money";
+import ReceiptField from "../../components/ReceiptField";
+
+function todayInput() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+export default function IncomeForm() {
+  const { id } = useParams();
+  const isEdit = !!id;
+  const navigate = useNavigate();
+  const { items } = useCollectionData("income");
+  const repo = useRepo("income");
+  const log = useAuditLog();
+  const { data: pmDoc } = useSettingDoc("paymentMethods");
+  const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+
+  const editing = isEdit ? items.find((r) => r.id === id) : null;
+
+  const [form, setForm] = useState({
+    amount: "",
+    date: todayInput(),
+    invoiceNumber: "",
+    paymentMethod: "",
+    paid: false,
+    note: "",
+    clientName: "",
+    receiptData: null,
+    receiptFileId: null,
+    receiptMime: null,
+  });
+
+  useEffect(() => {
+    if (editing) setForm({ ...form, ...editing, amount: editing.amount ?? "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing?.id]);
+
+  function set(patch) {
+    setForm((f) => ({ ...f, ...patch }));
+  }
+
+  async function save() {
+    const payload = {
+      amount: Number(form.amount) || 0,
+      date: form.date,
+      invoiceNumber: form.invoiceNumber.trim(),
+      paymentMethod: form.paymentMethod,
+      paid: form.paid,
+      note: form.note.trim(),
+      clientName: form.clientName.trim(),
+      treatmentName: editing?.treatmentName || form.note.trim(),
+      source: editing?.source || "manual",
+      receiptData: form.receiptData || null,
+      receiptFileId: form.receiptFileId || null,
+      receiptMime: form.receiptMime || null,
+    };
+    if (isEdit) {
+      await repo.update(id, payload);
+      await log({
+        action: "income_edit",
+        entity: { type: "income", id, desc: `${payload.treatmentName || "הכנסה"} · ${formatILS(payload.amount)}` },
+        before: { amount: editing.amount, paid: editing.paid, invoiceNumber: editing.invoiceNumber },
+        after: { amount: payload.amount, paid: payload.paid, invoiceNumber: payload.invoiceNumber },
+      });
+    } else {
+      await repo.add(payload);
+    }
+    navigate("/business");
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title={isEdit ? "עריכת הכנסה" : "הכנסה ידנית"}
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/business")}>
+            חזרה
+          </button>
+        }
+      />
+
+      <div className="card">
+        <div className="row-2">
+          <div className="field">
+            <label>סכום (₪)</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={form.amount}
+              onChange={(e) => set({ amount: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>תאריך</label>
+            <input type="date" value={form.date} onChange={(e) => set({ date: e.target.value })} />
+          </div>
+        </div>
+
+        {/* מספר חשבונית — בין שורת הסכום/תאריך לאמצעי התשלום (דרישת PRD) */}
+        <div className="field">
+          <label>מספר חשבונית</label>
+          <input
+            dir="ltr"
+            value={form.invoiceNumber}
+            onChange={(e) => set({ invoiceNumber: e.target.value })}
+          />
+        </div>
+
+        <div className="field">
+          <label>אמצעי תשלום</label>
+          <select value={form.paymentMethod} onChange={(e) => set({ paymentMethod: e.target.value })}>
+            <option value="">— בחרי —</option>
+            {methods.map((m) => (
+              <option key={m.id} value={m.name}>{m.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="row-2">
+          <div className="field">
+            <label>פירוט / טיפול</label>
+            <input value={form.note} onChange={(e) => set({ note: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>לקוחה (אופציונלי)</label>
+            <input value={form.clientName} onChange={(e) => set({ clientName: e.target.value })} />
+          </div>
+        </div>
+
+        <label className="inline-check">
+          <input type="checkbox" checked={form.paid} onChange={(e) => set({ paid: e.target.checked })} />
+          <span>סומן כשולם</span>
+        </label>
+
+        <div style={{ marginTop: 14 }}>
+          <ReceiptField value={form} onChange={set} />
+        </div>
+      </div>
+
+      <div className="save-row">
+        <button className="btn" disabled={!form.amount} onClick={save}>
+          {isEdit ? "אישור שמירה" : "הוספת הכנסה"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/calendar/Calendar.jsx @@@@@
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData, useRepo } from "../../data";
+import {
+  formatTime,
+  formatDate,
+  sameDay,
+  monthLabel,
+} from "../../utils/datetime";
+
+const WEEK = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
+
+export default function Calendar() {
+  const navigate = useNavigate();
+  const { items: appts, loading: la } = useCollectionData("appointments");
+  const { items: events, loading: le } = useCollectionData("events");
+  const apptRepo = useRepo("appointments");
+  const eventRepo = useRepo("events");
+
+  const [view, setView] = useState("month");
+  const [cursor, setCursor] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [selected, setSelected] = useState(new Date());
+  const [filters, setFilters] = useState({ showPast: true, showEvents: true, treatment: "" });
+  const [s
+### END 4/7 ###

@@ -1,0 +1,189 @@
+# שחזור פרויקט Daniel Skin Care במחשב אחר (העברת טקסט בלבד)
+
+מסמך זה מסביר איך להעביר את כל הפרויקט למחשב שני **דרך הודעות WhatsApp (טקסט בלבד)**,
+לשחזר אותו במדויק, ולהכין ממנו build לפריסה ב-Netlify.
+המסמך מתאים לשתי האפשרויות של קלוד במחשב 2: **Claude Code** (יכול לכתוב קבצים ולהריץ פקודות)
+או **claude.ai בדפדפן** (טקסט בלבד, יצירה ידנית).
+
+---
+
+## 0. מה מעבירים
+
+בתיקייה `transfer/` שנוצרה במחשב 1 יש 7 קבצי טקסט:
+
+```
+chunk-01.txt … chunk-07.txt
+```
+
+כל קובץ הוא הודעת WhatsApp אחת. יחד הם מכילים את **כל 76 קבצי הפרויקט** כטקסט גולמי.
+(לא כולל: `node_modules/`, `dist/`, `.env.local`, ו-`public/logo.png` — עליהם בהמשך.)
+
+### פורמט הפנימי (לידיעה)
+בתוך החלקים כל קובץ ארוז כך:
+```
+@@@@@ FILE: <נתיב הקובץ> @@@@@
+<תוכן הקובץ המדויק>
+@@@@@ ENDFILE @@@@@
+```
+וכל הודעה עטופה בכותרת `### DSC-TRANSFER n/7 ###` ובסיום `### END n/7 ###`.
+
+---
+
+## 1. שליחה ממחשב 1 (WhatsApp)
+
+1. פתח את `transfer/chunk-01.txt`, בחר הכל (Ctrl+A), העתק (Ctrl+C), הדבק בהודעת WhatsApp, שלח.
+2. חזור על כך עבור `chunk-02.txt` … `chunk-07.txt`, **לפי הסדר**.
+3. שלח כל חלק כהודעה נפרדת. אל תערבב סדר ואל תחתוך תווים.
+
+> טיפ: אם WhatsApp חותך הודעה ארוכה — שלח את אותו חלק שוב. כל חלק קטן ממגבלת התווים, אז זה לא אמור לקרות.
+
+---
+
+## 2. הכנות במחשב 2 (משותף לשתי האפשרויות)
+
+1. **התקן Node.js LTS** (אם עוד לא מותקן): הורד מ-<https://nodejs.org> (גרסת LTS).
+   בדיקה בטרמינל:
+   ```
+   node -v
+   npm -v
+   ```
+   שתי הפקודות צריכות להחזיר מספר גרסה.
+2. צור תיקיית עבודה חדשה, למשל `daniel-skin-care`, ופתח בתוכה טרמינל.
+3. שמור את 7 ההודעות שקיבלת ב-WhatsApp ל-7 קבצי טקסט בתוך התיקייה:
+   `chunk-01.txt` … `chunk-07.txt` (העתק מ-WhatsApp → הדבק ב-Notepad/עורך → שמור בשם המתאים).
+   > חשוב: השמות והסדר חייבים להיות מדויקים.
+
+---
+
+## 3א. שחזור עם **Claude Code** (מומלץ — הכי מהיר ופחות טעויות)
+
+פתח את Claude Code בתוך תיקיית העבודה, והדבק לו את הפרומפט הבא **מילה במילה**:
+
+> בתיקייה הזו יש 7 קבצים בשם `chunk-01.txt` עד `chunk-07.txt`.
+> כל קובץ מתחיל בשורת כותרת `### DSC-TRANSFER n/7 ###` ומסתיים ב-`### END n/7 ###`.
+> אנא בצע בדיוק:
+> 1. קרא את שבעת הקבצים לפי הסדר (01 עד 07), הסר מכל אחד את שורת הכותרת ואת שורת הסיום, ושרשר את התוכן לרצף אחד.
+> 2. ברצף המשורשר, כל קובץ פרויקט ארוז בין `@@@@@ FILE: <נתיב> @@@@@` לבין `@@@@@ ENDFILE @@@@@`. עבור כל בלוק כזה, צור קובץ בנתיב היחסי הנתון עם **התוכן המדויק שביניהם, מילה במילה, בלי לשנות דבר** (לא לתקן, לא לעצב מחדש, לא לקצר). צור תיקיות משנה לפי הצורך.
+> 3. בסיום, ספור והצג כמה קבצים יצרת — צריך להיות **76**.
+> אל תריץ עדיין שום פקודת התקנה או build; אני אבקש בהמשך.
+
+לאחר שקלוד יצר 76 קבצים, המשך לסעיף **4**.
+
+---
+
+## 3ב. שחזור עם **claude.ai בדפדפן** (טקסט בלבד, בלי כלים)
+
+בדפדפן קלוד לא יכול לכתוב קבצים לדיסק — לכן היצירה ידנית, וקלוד רק מנחה.
+
+יש שתי דרכים:
+
+**דרך מומלצת (עם Node שכבר התקנת):**
+1. אחד את 7 הקבצים לקובץ אחד `_archive.txt` (בטרמינל, בתוך התיקייה):
+   - Windows PowerShell:
+     ```
+     Get-Content chunk-01.txt,chunk-02.txt,chunk-03.txt,chunk-04.txt,chunk-05.txt,chunk-06.txt,chunk-07.txt | Set-Content _archive.txt
+     ```
+   - macOS/Linux:
+     ```
+     cat chunk-01.txt chunk-02.txt chunk-03.txt chunk-04.txt chunk-05.txt chunk-06.txt chunk-07.txt > _archive.txt
+     ```
+2. בקש מ-claude.ai (הדבק לו את הפרומפט):
+   > אני אתן לך תוכן קובץ בשם `_archive.txt`. הוא מכיל בלוקים בפורמט `@@@@@ FILE: <נתיב> @@@@@ … @@@@@ ENDFILE @@@@@`, וגם שורות `### DSC-TRANSFER` / `### END` שיש להתעלם מהן. כתוב לי **פקודת טרמינל אחת** (Node) שקוראת את `_archive.txt` ויוצרת את כל הקבצים בנתיבים הנכונים עם התוכן המדויק. אל תשנה תוכן.
+
+   הרץ את הפקודה שהוא ייתן, ובדוק שנוצרו 76 קבצים.
+
+**דרך ידנית לגמרי (בלי Node):**
+- פתח כל הודעת WhatsApp, ולכל בלוק `@@@@@ FILE: <נתיב> @@@@@` צור קובץ באותו נתיב (כולל תיקיות המשנה) והדבק את התוכן שעד `@@@@@ ENDFILE @@@@@`. חזור על כל 76 הקבצים. (איטי אך אמין.)
+
+לאחר שיש 76 קבצים, המשך לסעיף **4**.
+
+---
+
+## 4. לוגו זמני (placeholder)
+
+הלוגו המקורי לא הועבר. הוא משמש רק כאייקון (PWA / apple-touch-icon) — **ה-build עובד גם בלעדיו**
+(רק תופיע שגיאת 404 קטנה לאייקון). כדי לשים placeholder תקין:
+
+- אם יש Node, הרץ בתוך התיקייה:
+  ```
+  node -e "require('fs').mkdirSync('public',{recursive:true});require('fs').writeFileSync('public/logo.png',Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==','base64'))"
+  ```
+  (יוצר PNG זעיר תקין. אפשר להחליף בלוגו האמיתי מאוחר יותר — פשוט לשמור אותו כ-`public/logo.png`.)
+- הלוגו במסך ההתחברות נטען מ-localStorage, לא מהקובץ, אז אין השפעה על התחברות.
+
+---
+
+## 5. התקנה ובנייה (build)
+
+בתוך תיקיית העבודה, בטרמינל:
+```
+npm install
+npm run build
+```
+- `npm install` מוריד את התלויות לפי `package.json` + `package-lock.json` (גרסאות מדויקות).
+- `npm run build` יוצר תיקיית **`dist/`** — זו התיקייה לפריסה.
+
+(לבדיקה מקומית לפני פריסה: `npm run preview` ואז פתח את הכתובת שמוצגת.)
+
+---
+
+## 6. פריסה ל-Netlify
+
+**דרך א' — גרירה (הכי פשוט):**
+1. היכנס ל-<https://app.netlify.com> → "Add new site" → "Deploy manually".
+2. גרור את תיקיית **`dist/`** (לא את כל הפרויקט) לחלון.
+3. תקבל כתובת אתר חיה.
+
+**דרך ב' — Netlify CLI:**
+```
+npm install -g netlify-cli
+netlify deploy --dir=dist --prod
+```
+
+> קובץ `public/_redirects` כבר כלול ומועתק ל-`dist/`, כך שניתוב ה-SPA יעבוד ב-Netlify.
+
+---
+
+## 7. שלב חובה ב-Firebase Console (אחרת התחברות Google תיחסם)
+
+הקונפיג של Firebase כבר מוטמע בקוד (`src/firebase.js`), אבל צריך לאשר את דומיין ה-Netlify:
+1. Firebase Console → הפרויקט `daniel-skin-care` → **Authentication → Settings → Authorized domains**.
+2. הוסף את הדומיין שקיבלת מ-Netlify (למשל `your-site.netlify.app`).
+3. ודא שהתחברות Google מופעלת וש-Google Drive API פעיל בפרויקט (עבור צילומי האלבום).
+
+---
+
+## 8. צ'קליסט אימות
+
+- [ ] נוצרו **76 קבצים** (כולל `index.html`, `package.json`, `package-lock.json`, `vite.config.js`, `firestore.rules`, `.gitignore`, `public/`, ו-`src/`).
+- [ ] `npm install` הסתיים בלי שגיאות.
+- [ ] `npm run build` יצר תיקיית `dist/` עם `index.html` ו-`assets/`.
+- [ ] `npm run preview` — האפליקציה נטענת, מסך התחברות מופיע.
+- [ ] אחרי פריסה: הדומיין נוסף ל-Firebase Authorized domains, והתחברות Google עובדת.
+
+---
+
+## נספח: מבנה הקבצים המשוחזר (76)
+
+```
+index.html, package.json, package-lock.json, vite.config.js, firestore.rules, .gitignore
+public/  leaf.svg, manifest.webmanifest, _redirects   (+ logo.png placeholder)
+src/     App.jsx, main.jsx, firebase.js
+src/auth/        AuthProvider.jsx, LoginScreen.jsx, RequireAuth.jsx
+src/components/  AppShell, BarChart, BottomNav, DateField, ImageModal,
+                 PhotoDetailModal, ReceiptField, ScreenHeader, ScrollReset, TimeField
+src/data/        backup, firestore, index, localStore, photos,
+                 useAutoBackup, useImageSrc, useRecurringExpenses
+src/screens/     AllPhotos, Dashboard, Products, ProductSell, Series, SeriesPurchase
+src/screens/appointments/  AppointmentForm, CloseAppointment, SendInvite
+src/screens/business/      AuditLog, Business, ExpenseForm, IncomeForm
+src/screens/calendar/      Calendar, EventForm
+src/screens/clients/       AddClient, ClientAlbum, ClientArchive, ClientBasicFields,
+                           ClientCard, ClientDiagnosis, ClientsList, clientUtils,
+                           DiagnosisForm, diagnosisSchema, DiagnosisSummary
+src/screens/settings/      BusinessDetails, ExpenseCategories, Invitation, NameListEditor,
+                           PaymentMethods, PaymentVerification, SettingsHome,
+                           SettingsSubHeader, Treatments, WorkingHours
+src/theme/       global.css, login.css
+src/utils/       datetime, exportXlsx, invite, logo, money
+```

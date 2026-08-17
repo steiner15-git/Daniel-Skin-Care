@@ -1,0 +1,1776 @@
+### DSC-TRANSFER 5/7 ###
+ortBy, setSortBy] = useState("date");
+
+  // איחוד תורים ואירועים לרשומות תצוגה אחידות
+  const items = useMemo(() => {
+    const a = appts
+      .filter((x) => x.status !== "cancelled")
+      .map((x) => ({
+        id: x.id,
+        type: "appt",
+        start: x.start,
+        title: x.treatmentName || "טיפול",
+        subtitle: x.clientName || "",
+        raw: x,
+      }));
+    const e = events.map((x) => ({
+      id: x.id,
+      type: "event",
+      start: x.start,
+      title: x.title || "אירוע",
+      subtitle: "אירוע",
+      raw: x,
+    }));
+    return [...a, ...e];
+  }, [appts, events]);
+
+  const treatments = useMemo(
+    () => [...new Set(appts.map((a) => a.treatmentName).filter(Boolean))],
+    [appts]
+  );
+
+  function itemsForDay(day) {
+    return items
+      .filter((it) => sameDay(it.start, day))
+      .sort((x, y) => new Date(x.start) - new Date(y.start));
+  }
+
+  function cancelAppt(it) {
+    if (!confirm("לבטל את התור?")) return;
+    apptRepo.update(it.id, { status: "cancelled" });
+  }
+  function deleteEvent(it) {
+    if (!confirm("למחוק את האירוע?")) return;
+    eventRepo.remove(it.id);
+  }
+
+  const loading = la || le;
+
+  return (
+    <>
+      <ScreenHeader
+        title="יומן"
+        action={
+          <button className="btn" onClick={() => navigate("/calendar/event/new")}>
+            + אירוע
+          </button>
+        }
+      />
+
+      <div className="seg" style={{ marginBottom: 16 }}>
+        <button className={"seg__btn" + (view === "month" ? " on" : "")} onClick={() => setView("month")}>
+          לוח שנה
+        </button>
+        <button className={"seg__btn" + (view === "list" ? " on" : "")} onClick={() => setView("list")}>
+          רשימה
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="muted">טוען…</p>
+      ) : view === "month" ? (
+        <MonthView
+          cursor={cursor}
+          setCursor={setCursor}
+          selected={selected}
+          setSelected={setSelected}
+          items={items}
+          itemsForDay={itemsForDay}
+          onEditAppt={(it) => navigate(`/appointments/${it.id}/edit`)}
+          onCancelAppt={cancelAppt}
+          onResend={(it) => navigate(`/appointments/${it.id}/send`)}
+          onClose={(it) => navigate(`/appointments/${it.id}/close`, { state: { from: "calendar" } })}
+          onEditEvent={(it) => navigate(`/calendar/event/${it.id}/edit`)}
+          onDeleteEvent={deleteEvent}
+        />
+      ) : (
+        <ListView
+          items={items}
+          filters={filters}
+          setFilters={setFilters}
+          sortBy={sortBy}
+          setSortBy={setSortBy}
+          treatments={treatments}
+          onEditAppt={(it) => navigate(`/appointments/${it.id}/edit`)}
+          onCancelAppt={cancelAppt}
+          onResend={(it) => navigate(`/appointments/${it.id}/send`)}
+          onClose={(it) => navigate(`/appointments/${it.id}/close`, { state: { from: "calendar" } })}
+          onEditEvent={(it) => navigate(`/calendar/event/${it.id}/edit`)}
+          onDeleteEvent={deleteEvent}
+        />
+      )}
+    </>
+  );
+}
+
+function MonthView({
+  cursor,
+  setCursor,
+  selected,
+  setSelected,
+  items,
+  itemsForDay,
+  ...actions
+}) {
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const firstDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+
+  const hasItems = (day) => items.some((it) => sameDay(it.start, day));
+  const dayItems = itemsForDay(selected);
+
+  return (
+    <>
+      <div className="cal-nav">
+        <button className="icon-btn" onClick={() => setCursor(new Date(year, month - 1, 1))}>
+          ›
+        </button>
+        <strong>{monthLabel(cursor)}</strong>
+        <button className="icon-btn" onClick={() => setCursor(new Date(year, month + 1, 1))}>
+          ‹
+        </button>
+      </div>
+
+      <div className="cal-grid cal-grid--head">
+        {WEEK.map((w) => (
+          <div key={w} className="cal-dow">
+            {w}
+          </div>
+        ))}
+      </div>
+      <div className="cal-grid">
+        {cells.map((day, i) =>
+          day ? (
+            <button
+              key={i}
+              className={
+                "cal-cell" +
+                (sameDay(selected.toISOString(), day) ? " cal-cell--sel" : "") +
+                (sameDay(new Date().toISOString(), day) ? " cal-cell--today" : "")
+              }
+              onClick={() => setSelected(day)}
+            >
+              <span>{day.getDate()}</span>
+              {hasItems(day) && <span className="cal-dot" />}
+            </button>
+          ) : (
+            <div key={i} className="cal-cell cal-cell--empty" />
+          )
+        )}
+      </div>
+
+      <h3 className="group-title">{formatDate(selected.toISOString())}</h3>
+      {dayItems.length === 0 ? (
+        <div className="empty-state" style={{ padding: 16 }}>אין תורים או אירועים ביום זה.</div>
+      ) : (
+        <div className="list">
+          {dayItems.map((it) => (
+            <ItemRow key={it.type + it.id} it={it} {...actions} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ListView({ items, filters, setFilters, sortBy, setSortBy, treatments, ...actions }) {
+  const now = Date.now();
+  const filtered = useMemo(() => {
+    let list = items.slice();
+    if (!filters.showPast) list = list.filter((it) => new Date(it.start).getTime() >= now);
+    if (!filters.showEvents) list = list.filter((it) => it.type !== "event");
+    if (filters.treatment)
+      list = list.filter((it) => it.type === "appt" && it.title === filters.treatment);
+    list.sort((a, b) => {
+      if (sortBy === "client") return (a.subtitle || "").localeCompare(b.subtitle || "", "he");
+      return new Date(a.start) - new Date(b.start);
+    });
+    return list;
+  }, [items, filters, sortBy, now]);
+
+  // קיבוץ לפי תאריך
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const it of filtered) {
+      const key = formatDate(it.start);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(it);
+    }
+    return [...map.entries()];
+  }, [filtered]);
+
+  return (
+    <>
+      <div className="card filters">
+        <div className="filters__row">
+          <label className="inline-check">
+            <input
+              type="checkbox"
+              checked={filters.showPast}
+              onChange={(e) => setFilters({ ...filters, showPast: e.target.checked })}
+            />
+            <span>הצג עבר</span>
+          </label>
+          <label className="inline-check">
+            <input
+              type="checkbox"
+              checked={filters.showEvents}
+              onChange={(e) => setFilters({ ...filters, showEvents: e.target.checked })}
+            />
+            <span>הצג אירועים</span>
+          </label>
+        </div>
+        <div className="row-2">
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>סינון טיפול</label>
+            <select
+              value={filters.treatment}
+              onChange={(e) => setFilters({ ...filters, treatment: e.target.value })}
+            >
+              <option value="">הכל</option>
+              {treatments.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>סדר לפי</label>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+              <option value="date">תאריך</option>
+              <option value="client">לקוחה</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {groups.length === 0 ? (
+        <div className="empty-state">אין פריטים להצגה.</div>
+      ) : (
+        groups.map(([date, list]) => (
+          <div key={date}>
+            <h3 className="group-title">{date}</h3>
+            <div className="list">
+              {list.map((it) => (
+                <ItemRow key={it.type + it.id} it={it} {...actions} />
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </>
+  );
+}
+
+function ItemRow({ it, onEditAppt, onCancelAppt, onResend, onClose, onEditEvent, onDeleteEvent }) {
+  const isAppt = it.type === "appt";
+  const isDone = isAppt && it.raw.status === "done";
+  const isPast = new Date(it.start).getTime() < Date.now();
+  const needsClosing = isAppt && !isDone && isPast;
+
+  return (
+    <div
+      className={
+        "card list-item" +
+        (isAppt ? "" : " list-item--event") +
+        (needsClosing ? " list-item--pending" : "")
+      }
+    >
+      <div className="list-item__main">
+        <strong>
+          {formatTime(it.start)} · {it.title}
+        </strong>
+        <span className="muted">
+          {isAppt ? it.subtitle : "אירוע"}
+          {isDone ? " · נסגר ✓" : isAppt && it.raw.inviteSent ? " · זימון נשלח" : ""}
+        </span>
+      </div>
+      <div className="list-item__actions">
+        {isAppt ? (
+          isDone ? (
+            <span className="badge badge--ok">שולם</span>
+          ) : (
+            <>
+              {needsClosing && (
+                <button className="btn" onClick={() => onClose(it)}>
+                  אישור ביצוע
+                </button>
+              )}
+              <button className="btn btn--ghost" onClick={() => onEditAppt(it)}>
+                עריכה
+              </button>
+              <button className="btn btn--ghost" onClick={() => onResend(it)}>
+                זימון
+              </button>
+              <button className="btn btn--muted" onClick={() => onCancelAppt(it)}>
+                ביטול
+              </button>
+            </>
+          )
+        ) : (
+          <>
+            <button className="btn btn--ghost" onClick={() => onEditEvent(it)}>
+              עריכה
+            </button>
+            <button className="btn btn--muted" onClick={() => onDeleteEvent(it)}>
+              מחיקה
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/calendar/EventForm.jsx @@@@@
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import TimeField from "../../components/TimeField";
+import { useCollectionData, useRepo } from "../../data";
+import { combine, formatTime } from "../../utils/datetime";
+
+function todayInput() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function minutesBetween(startTime, endTime) {
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
+}
+
+export default function EventForm() {
+  const { id } = useParams();
+  const isEdit = !!id;
+  const navigate = useNavigate();
+  const { items: events } = useCollectionData("events");
+  const repo = useRepo("events");
+  const editing = isEdit ? events.find((e) => e.id === id) : null;
+
+  const [form, setForm] = useState({
+    title: "",
+    date: todayInput(),
+    startTime: "10:00",
+    endTime: "11:00",
+    note: "",
+  });
+
+  useEffect(() => {
+    if (!editing) return;
+    const d = new Date(editing.start);
+    const startTime = formatTime(editing.start);
+    const end = new Date(d.getTime() + (editing.durationMin || 60) * 60000);
+    setForm({
+      title: editing.title || "",
+      date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate()
+      ).padStart(2, "0")}`,
+      startTime,
+      endTime: `${String(end.getHours()).padStart(2, "0")}:${String(
+        end.getMinutes()
+      ).padStart(2, "0")}`,
+      note: editing.note || "",
+    });
+  }, [editing?.id]);
+
+  function set(patch) {
+    setForm((f) => ({ ...f, ...patch }));
+  }
+
+  const duration = minutesBetween(form.startTime, form.endTime);
+  const invalidRange = duration <= 0;
+
+  async function save() {
+    const payload = {
+      title: form.title.trim(),
+      start: combine(form.date, form.startTime),
+      durationMin: duration,
+      note: form.note.trim(),
+    };
+    if (isEdit) await repo.update(id, payload);
+    else await repo.add(payload);
+    navigate("/calendar", { replace: true });
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title={isEdit ? "עריכת אירוע" : "אירוע חדש"}
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/calendar")}>
+            ליומן
+          </button>
+        }
+      />
+
+      <div className="notice" style={{ marginTop: 0 }}>
+        אירוע תופס מקום ביומן אך אינו תור ואינו יוצר הכנסה (למשל חסימת זמן אישי).
+      </div>
+
+      <div className="card">
+        <div className="field">
+          <label>כותרת</label>
+          <input value={form.title} onChange={(e) => set({ title: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>תאריך</label>
+          <input type="date" value={form.date} onChange={(e) => set({ date: e.target.value })} />
+        </div>
+        <div className="row-2">
+          <div className="field">
+            <label>שעת התחלה</label>
+            <TimeField value={form.startTime} onChange={(t) => set({ startTime: t })} />
+          </div>
+          <div className="field">
+            <label>שעת סיום</label>
+            <TimeField value={form.endTime} onChange={(t) => set({ endTime: t })} />
+          </div>
+        </div>
+        {invalidRange && (
+          <p className="warn-text" style={{ marginTop: 0 }}>
+            ⚠ שעת הסיום צריכה להיות אחרי שעת ההתחלה.
+          </p>
+        )}
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label>הערה</label>
+          <textarea rows={2} value={form.note} onChange={(e) => set({ note: e.target.value })} />
+        </div>
+      </div>
+
+      <div className="save-row">
+        <button className="btn" disabled={!form.title.trim() || invalidRange} onClick={save}>
+          {isEdit ? "אישור שמירה" : "הוספת אירוע"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/AddClient.jsx @@@@@
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import ClientBasicFields from "./ClientBasicFields";
+import DiagnosisForm from "./DiagnosisForm";
+import { useCollectionData, useRepo } from "../../data";
+import { normalizePhone, ageFromBirthday } from "./clientUtils";
+
+export default function AddClient() {
+  const navigate = useNavigate();
+  const { items: clients } = useCollectionData("clients");
+  const repo = useRepo("clients");
+
+  const [step, setStep] = useState(1);
+  const [basic, setBasic] = useState({ emailInvite: false });
+  const [diagnosis, setDiagnosis] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const duplicatePhone = useMemo(() => {
+    const p = normalizePhone(basic.phone);
+    if (!p) return false;
+    return clients.some((c) => normalizePhone(c.phone) === p);
+  }, [basic.phone, clients]);
+
+  const canProceed = (basic.firstName || "").trim().length > 0;
+
+  async function save() {
+    setSaving(true);
+    const id = await repo.add({
+      ...basic,
+      diagnosis,
+      archived: false,
+    });
+    navigate(`/clients/${id}`, { replace: true });
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title={step === 1 ? "לקוחה חדשה · פרטים" : "לקוחה חדשה · אבחון עור"}
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/clients")}>
+            ביטול
+          </button>
+        }
+      />
+
+      <div className="stepper">
+        <span className={step === 1 ? "on" : ""}>1 · פרטים</span>
+        <span className={step === 2 ? "on" : ""}>2 · אבחון עור</span>
+      </div>
+
+      {step === 1 ? (
+        <>
+          <ClientBasicFields
+            value={basic}
+            onChange={setBasic}
+            duplicatePhone={duplicatePhone}
+          />
+          <div className="save-row">
+            <button className="btn" disabled={!canProceed} onClick={() => setStep(2)}>
+              המשך לאבחון →
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="notice" style={{ marginTop: 0 }}>
+            נשאב אוטומטית: {basic.firstName} {basic.lastName}
+            {ageFromBirthday(basic.birthday) != null &&
+              ` · גיל ${ageFromBirthday(basic.birthday)}`}
+          </div>
+          <DiagnosisForm value={diagnosis} onChange={setDiagnosis} />
+          <div className="save-row">
+            <button className="btn btn--muted" onClick={() => setStep(1)}>
+              → חזרה לפרטים
+            </button>
+            <button className="btn" disabled={saving} onClick={save}>
+              {saving ? "שומרת…" : "שמירת לקוחה"}
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/ClientAlbum.jsx @@@@@
+import { useMemo, useRef, useState } from "react";
+import { useCollectionData, useRepo, useSettingDoc, IS_LOCAL } from "../../data";
+import { useAuth } from "../../auth/AuthProvider";
+import { storeImage, deletePhoto } from "../../data/photos";
+import { useImageSrc } from "../../data/useImageSrc";
+import PhotoDetailModal from "../../components/PhotoDetailModal";
+
+function todayInput() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+export default function ClientAlbum({ clientId, clientName }) {
+  const { items, loading } = useCollectionData("photos");
+  const repo = useRepo("photos");
+  const { data: treatmentsDoc } = useSettingDoc("treatments");
+  const treatmentNames = (treatmentsDoc?.items ?? []).map((t) => t.name);
+  const { ensureDriveToken } = useAuth();
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [openId, setOpenId] = useState(null);
+
+  const mine = useMemo(
+    () =>
+      items
+        .filter((p) => p.clientId === clientId)
+        .sort((a, b) => (a.date || "").localeCompare(b.date || "")),
+    [items, clientId]
+  );
+
+  const openPhoto = mine.find((p) => p.id === openId) || null;
+
+  async function onPick(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    try {
+      const stored = await storeImage(file, {
+        folders: ["Clinic_Photos", clientName],
+        ensureDriveToken,
+      });
+      await repo.add({
+        clientId,
+        date: todayInput(),
+        description: "",
+        localData: stored.localData || null,
+        driveFileId: stored.driveFileId || null,
+        mimeType: stored.mimeType || "image/jpeg",
+      });
+    } catch {
+      setError("העלאת התמונה נכשלה. נסי שוב (בענן ייתכן שתידרש התחברות מחדש ל-Google).");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removePhoto(p) {
+    if (!confirm("למחוק את התמונה?")) return;
+    setOpenId(null);
+    await repo.remove(p.id);
+    if (!IS_LOCAL && p.driveFileId) {
+      try {
+        const token = await ensureDriveToken();
+        if (token) await deletePhoto(token, p.driveFileId);
+      } catch {
+        /* מחיקת הקובץ מ-Drive נכשלה — המטא-דאטה כבר הוסרה */
+      }
+    }
+  }
+
+  return (
+    <>
+      <div className="save-row" style={{ marginTop: 0 }}>
+        <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
+          {busy ? "מעלה…" : "הוספת תמונה"}
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPick} />
+      </div>
+
+      {error && <p className="warn-text">{error}</p>}
+
+      {loading ? (
+        <p className="muted">טוען…</p>
+      ) : mine.length === 0 ? (
+        <div className="empty-state" style={{ padding: 16 }}>
+          עדיין אין תמונות בלקוחה זו.
+        </div>
+      ) : (
+        <div className="album-grid">
+          {mine.map((p) => (
+            <Thumb key={p.id} photo={p} onOpen={() => setOpenId(p.id)} />
+          ))}
+        </div>
+      )}
+
+      {openPhoto && (
+        <PhotoDetailModal
+          photo={openPhoto}
+          treatments={treatmentNames}
+          onClose={() => setOpenId(null)}
+          onSave={repo.update}
+          onDelete={() => removePhoto(openPhoto)}
+        />
+      )}
+    </>
+  );
+}
+
+function Thumb({ photo, onOpen }) {
+  const src = useImageSrc(photo.localData, photo.driveFileId);
+  return (
+    <button className="album-thumb" onClick={onOpen} title={photo.description || photo.date}>
+      {src ? (
+        <img src={src} alt={photo.description || "תמונה"} />
+      ) : (
+        <span className="muted">טוען…</span>
+      )}
+      {(photo.date || photo.treatmentName || photo.description) && (
+        <span className="album-thumb__date">
+          {[photo.date, photo.treatmentName, photo.description].filter(Boolean).join(" · ")}
+        </span>
+      )}
+    </button>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/ClientArchive.jsx @@@@@
+import { useNavigate } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData, useRepo, useAuditLog } from "../../data";
+import { fullName } from "./clientUtils";
+
+export default function ClientArchive() {
+  const navigate = useNavigate();
+  const { items, loading } = useCollectionData("clients");
+  const repo = useRepo("clients");
+  const log = useAuditLog();
+
+  const archived = items.filter((c) => c.archived);
+
+  async function restore(c) {
+    await repo.update(c.id, { archived: false });
+    await log({
+      action: "client_restore",
+      entity: { type: "client", id: c.id, desc: fullName(c) },
+    });
+  }
+
+  async function permanentDelete(c) {
+    if (!confirm(`למחוק סופית את ${fullName(c)}? פעולה זו בלתי הפיכה.`)) return;
+    if (!confirm("אישור סופי: כל נתוני הלקוחה יימחקו לצמיתות. להמשיך?")) return;
+    await repo.remove(c.id);
+    await log({
+      action: "client_delete_permanent",
+      entity: { type: "client", id: c.id, desc: fullName(c) },
+    });
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title="ארכיון לקוחות"
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/clients")}>
+            חזרה
+          </button>
+        }
+      />
+
+      {loading ? (
+        <p className="muted">טוען…</p>
+      ) : archived.length === 0 ? (
+        <div className="empty-state">הארכיון ריק.</div>
+      ) : (
+        <div className="list">
+          {archived.map((c) => (
+            <div key={c.id} className="card list-item">
+              <div className="list-item__main">
+                <strong>{fullName(c)}</strong>
+                {c.phone && <span className="muted" dir="ltr">{c.phone}</span>}
+              </div>
+              <div className="list-item__actions">
+                <button className="btn btn--ghost" onClick={() => restore(c)}>
+                  שחזור
+                </button>
+                <button className="btn btn--danger" onClick={() => permanentDelete(c)}>
+                  מחיקה סופית
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/ClientBasicFields.jsx @@@@@
+import DateField from "../../components/DateField";
+
+const SOURCES = ["המלצה", "אינסטגרם", "פייסבוק", "גוגל", "לקוחה חוזרת", "אחר"];
+
+// שדות פרטים בסיסיים (שלב 1). רכיב מבוקר — משמש בהוספה ובעריכה.
+export default function ClientBasicFields({ value, onChange, duplicatePhone }) {
+  function set(k, v) {
+    onChange({ ...value, [k]: v });
+  }
+
+  return (
+    <div className="card">
+      <div className="row-2">
+        <div className="field">
+          <label>שם פרטי</label>
+          <input value={value.firstName || ""} onChange={(e) => set("firstName", e.target.value)} />
+        </div>
+        <div className="field">
+          <label>שם משפחה</label>
+          <input value={value.lastName || ""} onChange={(e) => set("lastName", e.target.value)} />
+        </div>
+      </div>
+
+      <div className="field">
+        <label>טלפון</label>
+        <input
+          type="tel"
+          dir="ltr"
+          value={value.phone || ""}
+          onChange={(e) => set("phone", e.target.value)}
+        />
+        {duplicatePhone && (
+          <p className="warn-text">⚠ מספר טלפון זה כבר קיים אצל לקוחה אחרת (ניתן להמשיך).</p>
+        )}
+      </div>
+
+      <div className="field" style={{ marginBottom: 8 }}>
+        <label>אימייל</label>
+        <input
+          type="email"
+          dir="ltr"
+          value={value.email || ""}
+          onChange={(e) => set("email", e.target.value)}
+        />
+      </div>
+      {/* צ'קבוקס הזימון ממוקם מיד מתחת לשדה האימייל (דרישת UX) */}
+      <label className="inline-check">
+        <input
+          type="checkbox"
+          checked={!!value.emailInvite}
+          onChange={(e) => set("emailInvite", e.target.checked)}
+        />
+        <span>מעוניינת לקבל זימון תור במייל</span>
+      </label>
+
+      <div className="row-2" style={{ marginTop: 14 }}>
+        <div className="field">
+          <label>תאריך לידה</label>
+          <DateField value={value.birthday || ""} onChange={(v) => set("birthday", v)} />
+        </div>
+        <div className="field">
+          <label>מקור הגעה</label>
+          <select value={value.source || ""} onChange={(e) => set("source", e.target.value)}>
+            <option value="">— בחרי —</option>
+            {SOURCES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="field" style={{ marginBottom: 0 }}>
+        <label>הערות פנימיות חסויות (גלוי רק לך, לעולם לא נשלח החוצה)</label>
+        <textarea
+          rows={3}
+          value={value.notes || ""}
+          onChange={(e) => set("notes", e.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/ClientCard.jsx @@@@@
+import { useMemo, useState } from "react";
+import { useNavigate, useParams, Link } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import ClientBasicFields from "./ClientBasicFields";
+import DiagnosisSummary from "./DiagnosisSummary";
+import ClientAlbum from "./ClientAlbum";
+import { useCollectionData, useRepo, useAuditLog } from "../../data";
+import { fullName, ageFromBirthday, normalizePhone } from "./clientUtils";
+
+const TABS = [
+  { key: "details", label: "פרטי לקוחה" },
+  { key: "appointments", label: "רשימת תורים" },
+  { key: "album", label: "אלבום" },
+];
+
+export default function ClientCard() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { items: clients, loading } = useCollectionData("clients");
+  const { items: appts } = useCollectionData("appointments");
+  const repo = useRepo("clients");
+  const log = useAuditLog();
+
+  const client = clients.find((c) => c.id === id);
+  const [tab, setTab] = useState("details");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);
+
+  const duplicatePhone = useMemo(() => {
+    if (!editing || !draft) return false;
+    const p = normalizePhone(draft.phone);
+    if (!p) return false;
+    return clients.some((c) => c.id !== id && normalizePhone(c.phone) === p);
+  }, [editing, draft, clients, id]);
+
+  if (loading) return <p className="muted">טוען…</p>;
+  if (!client)
+    return (
+      <>
+        <ScreenHeader title="לקוחה" />
+        <div className="empty-state">הלקוחה לא נמצאה.</div>
+      </>
+    );
+
+  function startEdit() {
+    setDraft({ ...client });
+    setEditing(true);
+  }
+  async function confirmEdit() {
+    await repo.update(id, draft);
+    await log({
+      action: "client_edit",
+      entity: { type: "client", id, desc: fullName(draft) },
+    });
+    setEditing(false);
+  }
+  async function archive() {
+    if (!confirm("להעביר את הלקוחה לארכיון? היסטוריית התורים תישמר.")) return;
+    await repo.update(id, { archived: true });
+    await log({
+      action: "client_archive",
+      entity: { type: "client", id, desc: fullName(client) },
+    });
+    navigate("/clients");
+  }
+
+  return (
+    <>
+      <ScreenHeader
+        title={fullName(client)}
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/clients")}>
+            חזרה
+          </button>
+        }
+      />
+
+      <div className="tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            className={"tab" + (tab === t.key ? " tab--on" : "")}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "details" && (
+        <DetailsTab
+          client={client}
+          editing={editing}
+          draft={draft}
+          setDraft={setDraft}
+          duplicatePhone={duplicatePhone}
+          onStartEdit={startEdit}
+          onCancel={() => setEditing(false)}
+          onConfirm={confirmEdit}
+          onArchive={archive}
+          id={id}
+        />
+      )}
+
+      {tab === "appointments" && <AppointmentsTab appts={appts} clientId={id} />}
+
+      {tab === "album" && <ClientAlbum clientId={id} clientName={fullName(client)} />}
+    </>
+  );
+}
+
+function DetailsTab({
+  client,
+  editing,
+  draft,
+  setDraft,
+  duplicatePhone,
+  onStartEdit,
+  onCancel,
+  onConfirm,
+  onArchive,
+  id,
+}) {
+  if (editing) {
+    return (
+      <>
+        <ClientBasicFields value={draft} onChange={setDraft} duplicatePhone={duplicatePhone} />
+        <div className="save-row">
+          <button className="btn btn--muted" onClick={onCancel}>
+            ביטול
+          </button>
+          <button className="btn" onClick={onConfirm}>
+            אישור שמירה
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  const age = ageFromBirthday(client.birthday);
+  return (
+    <>
+      <div className="card">
+        <ReadRow label="שם" value={fullName(client)} />
+        <ReadRow label="טלפון" value={client.phone || "—"} ltr />
+        <ReadRow label="אימייל" value={client.email || "—"} ltr />
+        <ReadRow
+          label="זימון במייל"
+          value={client.emailInvite ? "מעוניינת" : "לא מעוניינת"}
+        />
+        <ReadRow
+          label="תאריך לידה"
+          value={client.birthday ? `${client.birthday}${age != null ? ` · גיל ${age}` : ""}` : "—"}
+        />
+        <ReadRow label="מקור הגעה" value={client.source || "—"} />
+        {client.notes && (
+          <div className="read-row read-row--col">
+            <span className="muted">הערות פנימיות חסויות</span>
+            <span style={{ whiteSpace: "pre-wrap" }}>{client.notes}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <h3>אבחון עור</h3>
+          <Link to={`/clients/${id}/diagnosis`} className="link-action">
+            עריכה מלאה ‹
+          </Link>
+        </div>
+        <DiagnosisSummary value={client.diagnosis || {}} />
+      </div>
+
+      <div className="save-row" style={{ marginTop: 16 }}>
+        <button className="btn btn--muted" onClick={onArchive}>
+          שליחה לארכיון
+        </button>
+        <button className="btn" onClick={onStartEdit}>
+          עריכה
+        </button>
+      </div>
+    </>
+  );
+}
+
+function AppointmentsTab({ appts, clientId }) {
+  const { items: packages } = useCollectionData("clientPackages");
+  const mine = appts.filter((a) => a.clientId === clientId);
+  const now = Date.now();
+  const past = mine
+    .filter((a) => new Date(a.start).getTime() < now)
+    .sort((a, b) => new Date(b.start) - new Date(a.start));
+  const future = mine
+    .filter((a) => new Date(a.start).getTime() >= now)
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const myPackages = packages.filter((p) => p.clientId === clientId);
+
+  return (
+    <>
+      <PackagesSection packages={myPackages} />
+
+      <h3 className="group-title">תורים עתידיים</h3>
+      {future.length === 0 ? (
+        <div className="empty-state" style={{ padding: "16px" }}>אין תורים עתידיים.</div>
+      ) : (
+        <ApptList list={future} />
+      )}
+
+      <h3 className="group-title">תורי עבר</h3>
+      {past.length === 0 ? (
+        <div className="empty-state" style={{ padding: "16px" }}>אין תורי עבר.</div>
+      ) : (
+        <ApptList list={past} />
+      )}
+    </>
+  );
+}
+
+function packageState(p) {
+  if (p.status !== "active" || (p.remainingSessions ?? 0) <= 0) return "נוצלה";
+  if (p.expiryDate && new Date(p.expiryDate) < new Date(new Date().toDateString())) return "פקעה";
+  return "פעילה";
+}
+
+function PackagesSection({ packages }) {
+  const repo = useRepo("clientPackages");
+  const log = useAuditLog();
+  const [editId, setEditId] = useState(null);
+  const [draft, setDraft] = useState(null);
+
+  function startEdit(p) {
+    setEditId(p.id);
+    setDraft({
+      remainingSessions: p.remainingSessions ?? 0,
+      expiryDate: p.expiryDate || "",
+      status: p.status || "active",
+    });
+  }
+  async function saveEdit(p) {
+    const remainingSessions = Math.max(0, Number(draft.remainingSessions) || 0);
+    const patch = {
+      remainingSessions,
+      expiryDate: draft.expiryDate || null,
+      status: draft.status,
+    };
+    await repo.update(p.id, patch);
+    await log({
+      action: "package_edit",
+      entity: { type: "clientPackage", id: p.id, desc: `${p.clientName} — ${p.seriesName}` },
+      before: { remainingSessions: p.remainingSessions, expiryDate: p.expiryDate || null, status: p.status },
+      after: patch,
+    });
+    setEditId(null);
+    setDraft(null);
+  }
+  async function remove(p) {
+    if (!confirm(`למחוק את החבילה "${p.seriesName}"? ההכנסה מהרכישה לא תיפגע.`)) return;
+    await repo.remove(p.id);
+    await log({
+      action: "package_delete",
+      entity: { type: "clientPackage", id: p.id, desc: `${p.clientName} — ${p.seriesName}` },
+    });
+  }
+
+  if (packages.length === 0) {
+    return (
+      <div className="packages-band">
+        <span className="muted">חבילות/סדרות</span>
+        <span className="muted" style={{ fontSize: 13 }}>אין חבילות</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="list" style={{ marginBottom: 8 }}>
+      {packages.map((p) =>
+        editId === p.id ? (
+          <div key={p.id} className="card list-item--edit">
+            <strong>{p.seriesName}</strong>
+            <div className="row-2" style={{ marginTop: 8 }}>
+              <div className="field">
+                <label>מפגשים שנותרו (מתוך {p.totalSessions})</label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={draft.remainingSessions}
+                  onChange={(e) => setDraft({ ...draft, remainingSessions: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>בתוקף עד</label>
+                <input
+                  type="date"
+                  value={draft.expiryDate}
+                  onChange={(e) => setDraft({ ...draft, expiryDate: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label>סטטוס</label>
+              <select
+                value={draft.status}
+                onChange={(e) => setDraft({ ...draft, status: e.target.value })}
+              >
+                <option value="active">פעילה</option>
+                <option value="used">נוצלה</option>
+              </select>
+            </div>
+            <div className="save-row">
+              <button className="btn btn--muted" onClick={() => setEditId(null)}>ביטול</button>
+              <button className="btn" onClick={() => saveEdit(p)}>שמירה</button>
+            </div>
+          </div>
+        ) : (
+          <div key={p.id} className="card list-item">
+            <div className="list-item__main">
+              <strong>{p.seriesName} <span className="badge badge--info">{packageState(p)}</span></strong>
+              <span className="muted" style={{ fontSize: 13 }}>
+                נותרו {p.remainingSessions}/{p.totalSessions}
+                {p.expiryDate ? ` · בתוקף עד ${p.expiryDate}` : ""}
+              </span>
+            </div>
+            <div className="list-item__actions">
+              <button className="btn btn--ghost" onClick={() => startEdit(p)}>עריכה</button>
+              <button className="btn btn--muted" onClick={() => remove(p)}>מחיקה</button>
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function ApptList({ list }) {
+  return (
+    <div className="list">
+      {list.map((a) => (
+        <div key={a.id} className="card list-item">
+          <div className="list-item__main">
+            <strong>
+              {a.treatmentName || "טיפול"}{" "}
+              {a.clientPackageId && <span className="badge badge--info">מחבילה</span>}
+            </strong>
+            <span className="muted">{new Date(a.start).toLocaleString("he-IL")}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReadRow({ label, value, ltr }) {
+  return (
+    <div className="read-row">
+      <span className="muted">{label}</span>
+      <span dir={ltr ? "ltr" : undefined}>{value}</span>
+    </div>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/ClientDiagnosis.jsx @@@@@
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import DiagnosisForm from "./DiagnosisForm";
+import { useCollectionData, useRepo, useAuditLog } from "../../data";
+import { fullName, ageFromBirthday } from "./clientUtils";
+
+export default function ClientDiagnosis() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { items, loading } = useCollectionData("clients");
+  const repo = useRepo("clients");
+  const log = useAuditLog();
+  const client = items.find((c) => c.id === id);
+
+  const [draft, setDraft] = useState({});
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (client && !ready) {
+      setDraft(client.diagnosis || {});
+      setReady(true);
+    }
+  }, [client, ready]);
+
+  if (loading) return <p className="muted">טוען…</p>;
+  if (!client) return <div className="empty-state">הלקוחה לא נמצאה.</div>;
+
+  async function save() {
+    // עדכון דורס — אין שמירת היסטוריית גרסאות (לפי החלטת PRD)
+    await repo.update(id, { diagnosis: draft });
+    await log({
+      action: "client_diagnosis_edit",
+      entity: { type: "client", id, desc: fullName(client) },
+    });
+    navigate(`/clients/${id}`);
+  }
+
+  const age = ageFromBirthday(client.birthday);
+
+  return (
+    <>
+      <ScreenHeader
+        title="עריכת אבחון עור"
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate(`/clients/${id}`)}>
+            ביטול
+          </button>
+        }
+      />
+
+      <div className="notice" style={{ marginTop: 0 }}>
+        {fullName(client)}
+        {age != null && ` · גיל ${age}`}
+      </div>
+
+      <DiagnosisForm value={draft} onChange={setDraft} />
+
+      <div className="save-row">
+        <button className="btn btn--muted" onClick={() => navigate(`/clients/${id}`)}>
+          ביטול
+        </button>
+        <button className="btn" onClick={save}>
+          אישור שמירה
+        </button>
+      </div>
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/ClientsList.jsx @@@@@
+import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import ScreenHeader from "../../components/ScreenHeader";
+import { useCollectionData } from "../../data";
+import { fullName, normalizePhone } from "./clientUtils";
+
+export default function ClientsList() {
+  const navigate = useNavigate();
+  const { items, loading } = useCollectionData("clients");
+  const [q, setQ] = useState("");
+
+  const active = useMemo(
+    () => items.filter((c) => !c.archived),
+    [items]
+  );
+  const archivedCount = items.length - active.length;
+
+  const filtered = useMemo(() => {
+    const term = q.trim();
+    const digits = normalizePhone(term);
+    const list = active.filter((c) => {
+      const name = fullName(c);
+      const byName = term && name.includes(term);
+      const byPhone = digits && normalizePhone(c.phone).includes(digits);
+      return !term || byName || byPhone;
+    });
+    return list.sort((a, b) => fullName(a).localeCompare(fullName(b), "he"));
+  }, [active, q]);
+
+  return (
+    <>
+      <ScreenHeader
+        title="לקוחות"
+        action={
+          <button className="btn" onClick={() => navigate("/clients/new")}>
+            + לקוחה
+          </button>
+        }
+      />
+
+      <div className="field">
+        <input
+          placeholder="חיפוש לפי שם או טלפון"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+
+      {loading ? (
+        <p className="muted">טוען…</p>
+      ) : filtered.length === 0 ? (
+        <div className="empty-state">
+          {active.length === 0 ? "עדיין אין לקוחות. הוסיפי לקוחה ראשונה." : "לא נמצאו תוצאות."}
+        </div>
+      ) : (
+        <div className="list">
+          {filtered.map((c) => (
+            <Link key={c.id} to={`/clients/${c.id}`} className="card list-item">
+              <div className="list-item__main">
+                <strong>{fullName(c)}</strong>
+                {c.phone && <span className="muted" dir="ltr">{c.phone}</span>}
+              </div>
+              <span className="nav-card__chev">‹</span>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {archivedCount > 0 && (
+        <Link to="/clients/archive" className="archive-link">
+          ארכיון לקוחות ({archivedCount}) →
+        </Link>
+      )}
+    </>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/clientUtils.js @@@@@
+export function fullName(c) {
+  return [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim() || "ללא שם";
+}
+
+export function ageFromBirthday(birthday) {
+  if (!birthday) return null;
+  const b = new Date(birthday);
+  if (isNaN(b)) return null;
+  const now = new Date();
+  let age = now.getFullYear() - b.getFullYear();
+  const m = now.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age--;
+  return age;
+}
+
+export function normalizePhone(p) {
+  return (p || "").replace(/[^\d]/g, "");
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/DiagnosisForm.jsx @@@@@
+import { DIAGNOSIS_SECTIONS, SKIN_TYPES } from "./diagnosisSchema";
+
+// מרנדר את טופס האבחון מתוך הסכימה. readOnly=true → תצוגה בלבד.
+export default function DiagnosisForm({ value = {}, onChange, readOnly = false }) {
+  function setField(key, v) {
+    onChange({ ...value, [key]: v });
+  }
+
+  return (
+    <div className="list">
+      {DIAGNOSIS_SECTIONS.map((section) => (
+        <div key={section.key} className="card">
+          <h3 className="diag-section__title">{section.title}</h3>
+          <div className="diag-fields">
+            {section.fields.map((f) => (
+              <Field
+                key={f.key}
+                field={f}
+                value={value[f.key]}
+                onChange={(v) => setField(f.key, v)}
+                readOnly={readOnly}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Field({ field, value, onChange, readOnly }) {
+  const { type, label, textLabel, options } = field;
+
+  if (type === "yesNoText") {
+    const v = value || { yes: false, text: "" };
+    if (readOnly) {
+      return (
+        <ReadRow
+          label={label}
+          value={v.yes ? "כן" + (v.text ? ` · ${v.text}` : "") : "לא"}
+        />
+      );
+    }
+    return (
+      <div className="diag-field">
+        <label className="diag-check">
+          <input
+            type="checkbox"
+            checked={v.yes}
+            onChange={(e) => onChange({ ...v, yes: e.target.checked })}
+          />
+          <span>{label}</span>
+        </label>
+        {v.yes && (
+          <input
+            className="diag-inline-text"
+            placeholder={textLabel || "פירוט"}
+            value={v.text}
+            onChange={(e) => onChange({ ...v, text: e.target.value })}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (type === "select") {
+    if (readOnly) return <ReadRow label={label} value={value || "—"} />;
+    return (
+      <div className="diag-field">
+        <label className="diag-label">{label}</label>
+        <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
+          <option value="">— בחרי —</option>
+          {options.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+
+  if (type === "finding") {
+    const v = value || {};
+    const showExtras =
+      v.main && v.main !== "אין" && field.extras && field.extras.length > 0;
+    return (
+      <div className="diag-field">
+        <label className="diag-label">{label}</label>
+        <select value={v.main || ""} onChange={(e) => onChange({ ...v, main: e.target.value })}>
+          <option value="">— בחרי —</option>
+          {options.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        {showExtras && (
+          <div className="finding-extras">
+            {field.extras.map((ex) =>
+              ex.options ? (
+                <select
+                  key={ex.key}
+                  value={v[ex.key] || ""}
+                  onChange={(e) => onChange({ ...v, [ex.key]: e.target.value })}
+                >
+                  <option value="">{ex.label}</option>
+                  {ex.options.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  key={ex.key}
+                  placeholder={ex.label}
+                  value={v[ex.key] || ""}
+                  onChange={(e) => onChange({ ...v, [ex.key]: e.target.value })}
+                />
+              )
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (type === "textarea") {
+    if (readOnly) return <ReadRow label={label} value={value || "—"} />;
+    return (
+      <div className="diag-field">
+        <label className="diag-label">{label}</label>
+        <textarea rows={3} value={value || ""} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    );
+  }
+
+  if (type === "skinTypes") {
+    const arr = value || [];
+    if (readOnly) return <ReadRow label={label} value={arr.length ? arr.join(", ") : "—"} />;
+    function toggle(t) {
+      if (arr.includes(t)) onChange(arr.filter((x) => x !== t));
+      else if (arr.length < 2) onChange([...arr, t]);
+    }
+    return (
+      <div className="diag-field">
+        <label className="diag-label">{label}</label>
+        <div className="chips">
+          {SKIN_TYPES.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={"chip" + (arr.includes(t) ? " chip--on" : "")}
+              onClick={() => toggle(t)}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // text
+  if (readOnly) return <ReadRow label={label} value={value || "—"} />;
+  return (
+    <div className="diag-field">
+      <label className="diag-label">{label}</label>
+      <input value={value || ""} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function ReadRow({ label, value }) {
+  return (
+    <div className="read-row">
+      <span className="muted">{label}</span>
+      <span>{value}</span>
+    </div>
+  );
+}
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/diagnosisSchema.js @@@@@
+// סכימת "גיליון אבחון עור" — מותאמת לשאלון (חלק א' אנמנזה, חלק ב' דיאגנוזה של העור).
+// סוגי שדות:
+//   yesNoText  → { yes: bool, text: string }   (עם textLabel לפירוט מותנה)
+//   text       → מחרוזת
+//   finding    → { main: string, ...extras }    (בחירה עיקרית + שדות פירוט מותנים כשלא "אין")
+//   skinTypes  → עד 2 סוגי עור (מערך)
+
+export const SKIN_TYPES = [
+  "עור אקנתי",
+  "עור שמן",
+  "עור מעורב",
+  "עור יבש",
+  "עור רגיל",
+];
+
+const YESNO = ["יש", "אין"];
+
+export const DIAGNOSIS_SECTIONS = [
+  {
+    key: "health",
+    title: "אנמנזה · מצב בריאותי",
+    fields: [
+      { key: "slowHealing", type: "yesNoText", label: "החלמה איטית של פצעים וצלקות" },
+      { key: "skinIrritation", type: "yesNoText", label: "גירוי בעור" },
+      { key: "allergy", type: "yesNoText", label: "אלרגיה" },
+      { key: "pregnancy", type: "yesNoText", label: "בהריון" },
+      { key: "postpartum", type: "yesNoText", label: "לאחר לידה" },
+      { key: "fertility", type: "yesNoText", label: "בטיפולי פוריות" },
+      { key: "diabetes", type: "yesNoText", label: "סוכרת", textLabel: "מאוזנת עם תרופות?" },
+      { key: "heart", type: "yesNoText", label: "מחלת לב" },
+      { key: "pacemaker", type: "yesNoText", label: "קוצב לב / מסתם מלאכותי" },
+      { key: "bloodPressure", type: "yesNoText", label: "לחץ דם גבוה / נמוך" },
+      { key: "thyroid", type: "yesNoText", label: "חוסר איזון בבלוטת התריס" },
+      {
+        key: "infectious",
+        type: "yesNoText",
+        label: "הרפס / הפטיטיס / אפילפסיה / נשא H.I.V",
+      },
+      { key: "metal", type: "yesNoText", label: "מתכת בגוף" },
+      { key: "dental", type: "yesNoText", label: "כתרים / תותבות / שתלים בשיניים" },
+      { key: "otherDisease", type: "yesNoText", label: "מחלה אחרת", textLabel: "פרט/י" },
+    ],
+  },
+  {
+    key: "history",
+    title: "היסטוריה רפואית ותכשירים",
+    fields: [
+      { key: "acnePast", type: "yesNoText", label: "אקנה בעבר" },
+      { key: "roaccutaneNow", type: "yesNoText", label: "שימוש ברואקוטן (בהווה)" },
+      { key: "roaccutanePast", type: "yesNoText", label: "רואקוטן בעבר", textLabel: "מתי?" },
+      { key: "retinA", type: "yesNoText", label: "שימוש ברטין A" },
+      {
+        key: "prescriptionTopical",
+        type: "yesNoText",
+        label: "תכשיר מרשם רפואי על העור",
+        textLabel: "איזה?",
+      },
+      { key: "skinDiseasePast", type: "yesNoText", label: "מחלות עור בעבר", textLabel: "פרט/י" },
+      { key: "pills", type: "yesNoText", label: "גלולות למניעת הריון" },
+      { key: "dailyCare", type: "text", label: "תכשירי טיפוח יומיומיים" },
+    ],
+  },
+  {
+    key: "lifestyle",
+    title: "הרגלים וסגנון חיים",
+    fields: [
+      { key: "smoking", type: "yesNoText", label: "עישון", textLabel: "שנים / מס' ליום" },
+      { key: "sunExposure", type: "text", label: "רמת חשיפה לשמש (עיסוק / הרגלים / תחביבים)" },
+    ],
+  },
+  {
+    key: "observation",
+    title: "דיאגנוזה · ממצאים בעת הסתכלות",
+    fields: [
+      { key: "dermographism", type: "finding", label: "דרמוגרף-טסט (רגישות למגע)", options: YESNO },
+      { key: "skinTone", type: "finding", label: "גוון העור", options: ["אחיד", "לא אחיד"] },
+      {
+        key: "skinColor",
+        type: "finding",
+        label: "צבע העור",
+        options: ["אדום", "בהיר", "כהה", "צהבהב"],
+      },
+      {
+        key: "pores",
+        type: "finding",
+        label: "נקבוביות",
+        options: ["סגורות", "מעט פתוחות", "פתוחות"],
+      },
+      {
+        key: "comedones",
+        type: "finding",
+        label: "קומדונים",
+        options: YESNO,
+        extras: [{ key: "area", label: "אזור" }],
+      },
+      {
+        key: "wrinkles",
+        type: "finding",
+        label: "קמטים",
+        options: YESNO,
+        extras: [
+          { key: "type", label: "סוג", options: ["מימיקה", "גיל"] },
+          { key: "area", label: "אזור" },
+        ],
+      },
+    ],
+  },
+  {
+    key: "palpation",
+    title: "ממצאים בעזרת מישוש",
+    fields: [
+      { key: "muscleTone", type: "finding", label: "טונוס השריר", options: ["תקין", "בינוני", "נמוך"] },
+      { key: "turgor", type: "finding", label: "טורגור העור", options: ["תקין", "בינוני", "ירוד"] },
+      { key: "thickness", type: "finding", label: "עובי העור", options: ["דק", "בינוני", "עבה"] },
+      {
+        key: "touch",
+        type: "finding",
+        label: "מגע",
+        options: ["גס", "מחוספס", "מעט מחוספס", "חלק"],
+      },
+    ],
+  },
+  {
+    key: "lesions",
+    title: "רישום נגעים בעור",
+    fields: [
+      {
+        key: "papules",
+        type: "finding",
+        label: "פפולות",
+        options: YESNO,
+        extras: [{ key: "amount", label: "כמות" }, { key: "area", label: "אזור" }],
+      },
+      {
+        key: "pustules",
+        type: "finding",
+        label: "פוסטולות",
+        options: YESNO,
+        extras: [{ key: "amount", label: "כמות" }, { key: "area", label: "אזור" }],
+      },
+      {
+        key: "scars",
+        type: "finding",
+        label: "צלקות",
+        options: YESNO,
+        extras: [{ key: "type", label: "סוג" }],
+      },
+      { key: "milia", type: "finding", label: "מיליומים", options: YESNO },
+      {
+        key: "pigmentation",
+        type: "finding",
+        label: "פיגמנטציה",
+        options: YESNO,
+        extras: [{ key: "type", label: "סוג" }],
+      },
+      {
+        key: "nevi",
+        type: "finding",
+        label: "נבוסים",
+        options: YESNO,
+        extras: [{ key: "color", label: "צבע" }],
+      },
+      { key: "hyperemia", type: "finding", label: "היפרמיה", options: YESNO },
+      { key: "telangiectasia", type: "finding", label: "טלאנגיאקטזיה / קופרוז", options: YESNO },
+      { key: "hirsutism", type: "finding", label: "שיעור יתר", options: YESNO },
+      {
+        key: "otherLesions",
+        type: "finding",
+        label: "נגעים אחרים",
+        options: YESNO,
+        extras: [{ key: "type", label: "סוג" }],
+      },
+    ],
+  },
+  {
+    key: "final",
+    title: "דיאגנוזה סופית",
+    fields: [
+      { key: "skinTypes", type: "skinTypes", label: "סוג עור (עד 2)" },
+      { key: "generalNote", type: "textarea", label: "הערה (מצב עור)" },
+    ],
+  },
+];
+
+@@@@@ ENDFILE @@@@@
+@@@@@ FILE: src/screens/clients/DiagnosisSummary.jsx @@@@@
+import { DIAGNOSIS_SECTIONS } from "./diagnosisSchema";
+
+// תצוגת סיכום של טופס האבחון — מציגה רק את מה שסומן/מולא (לא מציפה).
+function displayValue(field, value) {
+  if (value == null) return null;
+  if (field.type === "yesNoText") {
+    if (!value.yes) return null;
+    return value.text ? value.text : "כן";
+  }
+  if (field.type === "skinTypes") {
+    return value.length ? value.join(", ") : null;
+  }
+  if (field.type === "finding") {
+    if (!value.main || value.main === "אין") return null;
+    const extras = (field.extras || [])
+      .map((e) => value[e.key])
+      .filter(Boolean)
+      .join(" · ");
+    return value.main + (extras ? ` (${extras})` : "");
+  }
+  const s = String(value).trim();
+  return s ? s : null;
+}
+
+export default function DiagnosisSummary({ value = {} }) {
+  const sections = DIAGNOSIS_SECTIONS.map((section) => {
+    const rows = section.fields
+      .map((f) => ({ label: f.
+### END 5/7 ###
