@@ -6,6 +6,7 @@ import {
   GoogleAuthProvider,
 } from "firebase/auth";
 import { auth, googleProvider } from "../firebase";
+import { silentDriveToken } from "./googleDrive";
 
 const AuthContext = createContext(null);
 
@@ -17,12 +18,23 @@ const DEV_USER =
     ? { uid: "dev-local-user", displayName: "מצב בדיקה מקומי", email: "dev@local" }
     : null;
 
+// Client ID מסוג Web OAuth (Google Cloud Console) — נדרש לרענון שקט של טוקן
+// Drive באמצעות Google Identity Services. אם לא מוגדר, המערכת פשוט נופלת
+// תמיד לפופ-אפ מלא (ההתנהגות הקודמת) — לא שובר כלום, רק פחות נוח.
+const DRIVE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+
+// מרווח ביטחון: מרעננים את הטוקן כ-5 דקות לפני שהוא פג בפועל, כדי שקריאת
+// Drive לעולם לא "תיתקל" בטוקן שפג באמצע פעולה.
+const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(DEV_USER);
   const [loading, setLoading] = useState(!DEV_USER);
   // access token של Google Drive, מתקבל בעת ההתחברות (scope drive.file)
   const [driveToken, setDriveToken] = useState(null);
-  // בקשת טוקן אחת בטיסה — מונע ריבוי פופ-אפים כשכמה רכיבים מבקשים טוקן בו-זמנית
+  // זמן (ms מאז epoch) שממנו ואילך יש לרענן את הטוקן הנוכחי מחדש
+  const driveTokenRefreshAtRef = useRef(0);
+  // בקשת טוקן אחת בטיסה — מונע ריבוי פופ-אפים/בקשות כשכמה רכיבים מבקשים טוקן בו-זמנית
   const tokenRequestRef = useRef(null);
 
   useEffect(() => {
@@ -33,6 +45,13 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
+  function storeDriveToken(token, expiresInSec = 3600) {
+    setDriveToken(token);
+    driveTokenRefreshAtRef.current = token
+      ? Date.now() + expiresInSec * 1000 - TOKEN_REFRESH_BUFFER_MS
+      : 0;
+  }
+
   async function signIn() {
     if (DEV_USER) {
       setUser(DEV_USER);
@@ -40,23 +59,36 @@ export function AuthProvider({ children }) {
     }
     const result = await signInWithPopup(auth, googleProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    setDriveToken(credential?.accessToken ?? null);
+    // ל-signInWithPopup הרגיל אין expires_in — מניחים ברירת מחדל שמרנית (שעה)
+    storeDriveToken(credential?.accessToken ?? null);
     return result.user;
   }
 
-  // מחזיר access token תקף ל-Drive; אם אין (למשל לאחר רענון דף) — מפעיל פופ-אפ
-  // התחברות מחדש כדי לרכוש טוקן טרי. במצב תצוגה מקומי אין Drive ולכן מחזיר null.
-  // כמה קוראים בו-זמנית (למשל רשת ממוזערות באלבום) חולקים אותה בקשת פופ-אפ יחידה.
+  // מחזיר access token תקף ל-Drive. סדר ניסיונות:
+  // 1. טוקן קיים ועדיין בתוקף (לפי המעקב שלנו) → מוחזר מיד, בלי שום קריאה.
+  // 2. רענון שקט (GIS, ללא פופ-אפ) — עובד כל עוד יש הסכמה פעילה בדפדפן.
+  // 3. נפילה חזרה לפופ-אפ התחברות מלא (ההתנהגות הישנה) — רק אם השקט נכשל.
+  // כמה קוראים בו-זמנית חולקים אותה בקשה יחידה (tokenRequestRef).
   async function ensureDriveToken() {
     if (DEV_USER) return null;
-    if (driveToken) return driveToken;
+
+    const stillFresh = driveToken && Date.now() < driveTokenRefreshAtRef.current;
+    if (stillFresh) return driveToken;
+
     if (tokenRequestRef.current) return tokenRequestRef.current;
+
     tokenRequestRef.current = (async () => {
       try {
+        const silent = await silentDriveToken(DRIVE_CLIENT_ID);
+        if (silent?.token) {
+          storeDriveToken(silent.token, silent.expiresIn);
+          return silent.token;
+        }
+
         const result = await signInWithPopup(auth, googleProvider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
         const token = credential?.accessToken ?? null;
-        setDriveToken(token);
+        storeDriveToken(token);
         return token;
       } finally {
         tokenRequestRef.current = null;
@@ -66,7 +98,7 @@ export function AuthProvider({ children }) {
   }
 
   function logOut() {
-    setDriveToken(null);
+    storeDriveToken(null);
     return signOut(auth);
   }
 

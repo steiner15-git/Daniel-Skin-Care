@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
+import DateField from "../components/DateField";
 import { useCollectionData, useRepo, useSettingDoc } from "../data";
 import { formatILS } from "../utils/money";
 
@@ -167,6 +168,7 @@ export default function Series() {
 function SeriesFields({ d, setD, treatments, onSave, onCancel, editing }) {
   const [pending, setPending] = useState("");
   const available = treatments.filter((t) => !d.treatments.some((x) => x.id === t.id));
+  const thisYear = new Date().getFullYear();
 
   function addTreatment() {
     const t = treatments.find((x) => x.id === pending);
@@ -243,11 +245,28 @@ function SeriesFields({ d, setD, treatments, onSave, onCancel, editing }) {
       </div>
       <div className="field" style={{ marginBottom: onCancel ? 12 : 0 }}>
         <label>בתוקף עד (אופציונלי)</label>
-        <input
-          type="date"
+        {/*
+          שדה מותאם (DateField) במקום <input type="date"> טבעי — עקבי עם שאר
+          האפליקציה ונמנע מבאגים של הפיקר הטבעי בדפדפן (כולל כפתור "Clear"
+          שלעיתים לא מרוקן את השדה בפועל). כפתור "נקה תאריך" מפורש מבטיח ניקוי
+          אמין תמיד, בלי תלות בהתנהגות פיקר כלשהו.
+        */}
+        <DateField
           value={d.expiryDate}
-          onChange={(e) => setD({ ...d, expiryDate: e.target.value })}
+          onChange={(v) => setD({ ...d, expiryDate: v })}
+          fromYear={thisYear}
+          toYear={thisYear + 10}
         />
+        {d.expiryDate && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            style={{ marginTop: 8 }}
+            onClick={() => setD({ ...d, expiryDate: "" })}
+          >
+            נקה תאריך
+          </button>
+        )}
       </div>
       {onCancel ? (
         <div className="save-row">

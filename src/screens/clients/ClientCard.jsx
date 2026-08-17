@@ -185,7 +185,10 @@ function DetailsTab({
 
 function AppointmentsTab({ appts, clientId }) {
   const { items: packages } = useCollectionData("clientPackages");
-  const mine = appts.filter((a) => a.clientId === clientId);
+  // תור שבוטל ביומן נשאר ברשומות (לצורך היסטוריה/דוחות) אך מסומן status:
+  // "cancelled" ואינו נמחק — לכן יש לסנן אותו כאן בדיוק כפי שהיומן (Calendar.jsx)
+  // עושה, אחרת תור מבוטל "נדבק" לרשימת התורים של הלקוחה לנצח.
+  const mine = appts.filter((a) => a.clientId === clientId && a.status !== "cancelled");
   const now = Date.now();
   const past = mine
     .filter((a) => new Date(a.start).getTime() < now)

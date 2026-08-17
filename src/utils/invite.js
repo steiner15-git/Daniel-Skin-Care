@@ -42,9 +42,18 @@ export function gcalUrl({ title, start, durationMin, details, location }) {
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
+// קידוד ידני ל-mailto לפי RFC 6068: encodeURIComponent (לא application/x-www-form
+// -urlencoded של URLSearchParams, שמקודד רווח כ-"+" ולא כ-"%20" — הבדל שגורם
+// לחלק ניכר מלקוחות המייל, בעיקר בנייד, "לבלוע" או לקטוע את תוכן הגוף).
+// כמו כן ממירים ירידת שורה ל-CRLF (%0D%0A) כפי שדורש תקן ה-mailto.
+function mailtoEncode(s) {
+  return encodeURIComponent(s || "").replace(/%0A/g, "%0D%0A");
+}
+
 export function mailtoUrl(to, subject, body) {
-  const params = new URLSearchParams();
-  if (subject) params.set("subject", subject);
-  if (body) params.set("body", body);
-  return `mailto:${to || ""}?${params.toString()}`;
+  const parts = [];
+  if (subject) parts.push(`subject=${mailtoEncode(subject)}`);
+  if (body) parts.push(`body=${mailtoEncode(body)}`);
+  const query = parts.length ? `?${parts.join("&")}` : "";
+  return `mailto:${to || ""}${query}`;
 }

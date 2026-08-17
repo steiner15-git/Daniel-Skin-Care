@@ -138,6 +138,9 @@ function Summary({ income, expenses }) {
 function IncomeTab({ income, initialMissing = "" }) {
   const navigate = useNavigate();
   const repo = useRepo("income");
+  const apptRepo = useRepo("appointments");
+  const packageRepo = useRepo("clientPackages");
+  const { items: packages } = useCollectionData("clientPackages");
   const log = useAuditLog();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [];
@@ -188,9 +191,56 @@ function IncomeTab({ income, initialMissing = "" }) {
     });
   }
 
+  // מחיקת הכנסה משויכת לתור/סדרה עלולה להשאיר "יתום" ביומן/בכרטיסיית הלקוחה
+  // אם לא מטופלת במפורש — לכן שואלים על כך בנפרד לפני מחיקת ההכנסה עצמה.
+  async function handleLinkedRecords(r) {
+    // הכנסה מתור רגיל — לשאול האם למחוק גם את התור (מהיומן ומרשימת הלקוחה)
+    if (r.source === "appointment" && r.appointmentId) {
+      const alsoDeleteAppt = confirm(
+        "האם למחוק גם את התור המשויך מהיומן ומרשימת התורים של הלקוחה?"
+      );
+      if (alsoDeleteAppt) {
+        try {
+          await apptRepo.remove(r.appointmentId);
+          await log({
+            action: "appointment_delete",
+            entity: {
+              type: "appointment",
+              id: r.appointmentId,
+              desc: `${r.treatmentName || "תור"}${r.clientName ? ` · ${r.clientName}` : ""}`,
+            },
+          });
+        } catch {
+          /* התור כבר לא קיים / מחיקתו נכשלה — ההכנסה עדיין תימחק בהמשך */
+        }
+      }
+      return;
+    }
+
+    // הכנסה מרכישת סדרה/חבילה — לשאול האם למחוק גם את החבילה
+    if (r.source === "series") {
+      const pkg = packages.find((p) => p.incomeId === r.id);
+      if (!pkg) return;
+      const usedSome = (pkg.remainingSessions ?? 0) < (pkg.totalSessions ?? 0);
+      const question = usedSome
+        ? `החבילה "${pkg.seriesName}" כבר נוצלה חלקית (נותרו ${pkg.remainingSessions}/${pkg.totalSessions} מפגשים). האם למחוק אותה בכל זאת? תורים שכבר חויבו ממנה יישארו מתויגים "מחבילה" בהיסטוריה, ללא חבילה פעילה מאחוריהם.`
+        : `האם למחוק גם את החבילה "${pkg.seriesName}" מכרטיסיית הלקוחה?`;
+      if (confirm(question)) {
+        await packageRepo.remove(pkg.id);
+        await log({
+          action: "package_delete",
+          entity: { type: "clientPackage", id: pkg.id, desc: `${pkg.clientName} — ${pkg.seriesName}` },
+        });
+      }
+    }
+  }
+
   async function remove(r) {
     if (r.paid) return;
     if (!confirm("למחוק את ההכנסה?")) return;
+
+    await handleLinkedRecords(r);
+
     await repo.remove(r.id);
     await log({
       action: "income_delete",

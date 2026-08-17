@@ -20,6 +20,7 @@ const ACTION_LABELS = {
   package_charge: "חיוב תור מחבילה",
   package_edit: "עריכת חבילת לקוחה",
   package_delete: "מחיקת חבילת לקוחה",
+  appointment_delete: "מחיקת תור",
 };
 
 function tsToStr(ts) {
