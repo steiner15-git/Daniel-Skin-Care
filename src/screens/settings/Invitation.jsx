@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
+import { DEFAULT_INVITATION_SUBJECT, DEFAULT_INVITATION_BODY } from "../../utils/invite";
 
 const FIELDS = [
   "{שם_לקוחה}",
@@ -12,14 +13,8 @@ const FIELDS = [
 ];
 
 const DEFAULT = {
-  subject: "תזכורת לתור ב{שם_עסק}",
-  body:
-    "שלום {שם_לקוחה},\n" +
-    "זהו זימון לתור ל{סוג_טיפול}.\n" +
-    "תאריך: {תאריך}\n" +
-    "שעה: {שעה}\n" +
-    "כתובת: {כתובת_עסק}\n\n" +
-    "נתראה!\n{שם_עסק}",
+  subject: DEFAULT_INVITATION_SUBJECT,
+  body: DEFAULT_INVITATION_BODY,
 };
 
 export default function Invitation() {

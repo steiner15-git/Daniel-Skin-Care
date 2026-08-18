@@ -38,7 +38,17 @@ export default function IncomeForm() {
   });
 
   useEffect(() => {
-    if (editing) setForm({ ...form, ...editing, amount: editing.amount ?? "" });
+    if (editing)
+      setForm({
+        ...form,
+        ...editing,
+        amount: editing.amount ?? "",
+        // "פירוט / טיפול" הוא כעת שדה העריכה היחיד לשם המוצג (treatmentName).
+        // הכנסות שנוצרו אוטומטית (מתור/מכירה) נשמרות עם treatmentName אך בלי
+        // note — לכן טוענים מ-note אם קיים, ואם לא, מ-treatmentName הקיים,
+        // כדי שהשדה בפועל יציג את הערך הנוכחי ולא יופיע ריק.
+        note: editing.note || editing.treatmentName || "",
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing?.id]);
 
@@ -55,7 +65,11 @@ export default function IncomeForm() {
       paid: form.paid,
       note: form.note.trim(),
       clientName: form.clientName.trim(),
-      treatmentName: editing?.treatmentName || form.note.trim(),
+      // תוקן: לפני כן, כאשר עורכים הכנסה שכבר יש לה treatmentName (כל הכנסה
+      // אוטומטית), הביטוי היה editing?.treatmentName || form.note.trim() —
+      // שמתעלם תמיד מהעריכה בפועל (כי editing.treatmentName תמיד "אמיתי").
+      // כעת שדה "פירוט / טיפול" הוא מקור האמת היחיד, תמיד ניתן לעריכה.
+      treatmentName: form.note.trim(),
       source: editing?.source || "manual",
       receiptData: form.receiptData || null,
       receiptFileId: form.receiptFileId || null,

@@ -9,14 +9,19 @@ import { IS_LOCAL } from "./index";
 const SIX_HOURS = 6 * 60 * 60 * 1000;
 
 export function useAutoBackup() {
-  const { user, driveToken } = useAuth();
+  const { user, ensureDriveToken } = useAuth();
 
   useEffect(() => {
-    if (IS_LOCAL || !user || !driveToken) return;
+    if (IS_LOCAL || !user) return;
 
     async function run() {
       try {
-        await runBackup(user.uid, driveToken);
+        // נשלף טוקן טרי בזמן הריצה עצמו (ולא נלקח מ-state שנתפס בזמן ה-effect)
+        // — כך שגם גיבוי שרץ שעות רבות אחרי הכניסה מקבל טוקן תקף, כולל רענון
+        // שקט אם נדרש, במקום להיכשל בשקט על טוקן שכבר פג.
+        const token = await ensureDriveToken();
+        if (!token) return;
+        await runBackup(user.uid, token);
       } catch {
         // גיבוי לעולם לא יפיל או יאט את האפליקציה
       }
@@ -28,5 +33,6 @@ export function useAutoBackup() {
       clearTimeout(initial);
       clearInterval(interval);
     };
-  }, [user, driveToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 }

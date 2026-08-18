@@ -1274,3 +1274,20 @@ textarea {
 .lively .nav-card:hover .nav-card__chev {
   transform: translateX(-3px);
 }
+
+.drive-reauth-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(176, 72, 60, 0.1);
+  border-bottom: 1px solid rgba(176, 72, 60, 0.25);
+  color: var(--danger);
+  font-size: 13px;
+  padding: 8px 14px;
+}
+.drive-reauth-banner .btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+}

@@ -8,6 +8,19 @@ function calStamp(d) {
   );
 }
 
+// ברירות מחדל לתוכן הזימון — משמשות ב-2 מקומות: כתצוגת פתיחה במסך ההגדרות
+// (Invitation.jsx), וכ"רשת ביטחון" בפועל ב-SendInvite.jsx אם מסמך ה-settings
+// מעולם לא נשמר בפועל (invitation?.body/subject הם undefined). בלי הרשת הזו,
+// מייל שנשלח לפני ביקור ראשון במסך ההגדרות היה יוצא כמעט ריק.
+export const DEFAULT_INVITATION_SUBJECT = "תזכורת לתור ב{שם_עסק}";
+export const DEFAULT_INVITATION_BODY =
+  "שלום {שם_לקוחה},\n" +
+  "זהו זימון לתור ל{סוג_טיפול}.\n" +
+  "תאריך: {תאריך}\n" +
+  "שעה: {שעה}\n" +
+  "כתובת: {כתובת_עסק}\n\n" +
+  "נתראה!\n{שם_עסק}";
+
 // מילוי תבנית הזימון בשדות דינמיים. לעולם ללא מחיר/עלות/רווח.
 export function fillTemplate(text, tokens) {
   return String(text || "").replace(/\{([^}]+)\}/g, (m, key) =>
@@ -43,9 +56,8 @@ export function gcalUrl({ title, start, durationMin, details, location }) {
 }
 
 // קידוד ידני ל-mailto לפי RFC 6068: encodeURIComponent (לא application/x-www-form
-// -urlencoded של URLSearchParams, שמקודד רווח כ-"+" ולא כ-"%20" — הבדל שגורם
-// לחלק ניכר מלקוחות המייל, בעיקר בנייד, "לבלוע" או לקטוע את תוכן הגוף).
-// כמו כן ממירים ירידת שורה ל-CRLF (%0D%0A) כפי שדורש תקן ה-mailto.
+// -urlencoded של URLSearchParams, שמקודד רווח כ-"+" ולא כ-"%20"). כמו כן ממירים
+// ירידת שורה ל-CRLF (%0D%0A) כפי שדורש התקן.
 function mailtoEncode(s) {
   return encodeURIComponent(s || "").replace(/%0A/g, "%0D%0A");
 }

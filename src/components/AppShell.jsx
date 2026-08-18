@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from "react-router-dom";
 import BottomNav from "./BottomNav";
 import ScrollReset from "./ScrollReset";
+import DriveReauthBanner from "./DriveReauthBanner";
 import { IS_LOCAL } from "../data";
 
 export default function AppShell() {
@@ -13,6 +14,7 @@ export default function AppShell() {
           מצב תצוגה מקומי — הנתונים נשמרים במכשיר זה בלבד
         </div>
       )}
+      <DriveReauthBanner />
       <main className="app__main">
         {/* key לפי הנתיב → אנימציית כניסה עדינה בכל מעבר מסך */}
         <div className="lively" key={location.pathname}>

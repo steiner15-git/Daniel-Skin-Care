@@ -15,6 +15,7 @@ export default function Calendar() {
   const navigate = useNavigate();
   const { items: appts, loading: la } = useCollectionData("appointments");
   const { items: events, loading: le } = useCollectionData("events");
+  const { items: income } = useCollectionData("income");
   const apptRepo = useRepo("appointments");
   const eventRepo = useRepo("events");
 
@@ -26,6 +27,14 @@ export default function Calendar() {
   const [selected, setSelected] = useState(new Date());
   const [filters, setFilters] = useState({ showPast: true, showEvents: true, treatment: "" });
   const [sortBy, setSortBy] = useState("date");
+
+  // מיפוי מזהה-הכנסה → רשומת הכנסה, כדי לדעת אם תור שנסגר ("status: done")
+  // באמת סומן כ"שולם" בפועל, ולא רק "בוצע" (אלו שני מושגים שונים — ראו ItemRow).
+  const incomeById = useMemo(() => {
+    const map = {};
+    for (const r of income) map[r.id] = r;
+    return map;
+  }, [income]);
 
   // איחוד תורים ואירועים לרשומות תצוגה אחידות
   const items = useMemo(() => {
@@ -101,6 +110,7 @@ export default function Calendar() {
           selected={selected}
           setSelected={setSelected}
           items={items}
+          incomeById={incomeById}
           itemsForDay={itemsForDay}
           onEditAppt={(it) => navigate(`/appointments/${it.id}/edit`)}
           onCancelAppt={cancelAppt}
@@ -112,6 +122,7 @@ export default function Calendar() {
       ) : (
         <ListView
           items={items}
+          incomeById={incomeById}
           filters={filters}
           setFilters={setFilters}
           sortBy={sortBy}
@@ -135,6 +146,7 @@ function MonthView({
   selected,
   setSelected,
   items,
+  incomeById,
   itemsForDay,
   ...actions
 }) {
@@ -195,7 +207,7 @@ function MonthView({
       ) : (
         <div className="list">
           {dayItems.map((it) => (
-            <ItemRow key={it.type + it.id} it={it} {...actions} />
+            <ItemRow key={it.type + it.id} it={it} incomeById={incomeById} {...actions} />
           ))}
         </div>
       )}
@@ -203,7 +215,7 @@ function MonthView({
   );
 }
 
-function ListView({ items, filters, setFilters, sortBy, setSortBy, treatments, ...actions }) {
+function ListView({ items, incomeById, filters, setFilters, sortBy, setSortBy, treatments, ...actions }) {
   const now = Date.now();
   const filtered = useMemo(() => {
     let list = items.slice();
@@ -283,7 +295,7 @@ function ListView({ items, filters, setFilters, sortBy, setSortBy, treatments, .
             <h3 className="group-title">{date}</h3>
             <div className="list">
               {list.map((it) => (
-                <ItemRow key={it.type + it.id} it={it} {...actions} />
+                <ItemRow key={it.type + it.id} it={it} incomeById={incomeById} {...actions} />
               ))}
             </div>
           </div>
@@ -293,11 +305,17 @@ function ListView({ items, filters, setFilters, sortBy, setSortBy, treatments, .
   );
 }
 
-function ItemRow({ it, onEditAppt, onCancelAppt, onResend, onClose, onEditEvent, onDeleteEvent }) {
+function ItemRow({ it, incomeById, onEditAppt, onCancelAppt, onResend, onClose, onEditEvent, onDeleteEvent }) {
   const isAppt = it.type === "appt";
   const isDone = isAppt && it.raw.status === "done";
   const isPast = new Date(it.start).getTime() < Date.now();
   const needsClosing = isAppt && !isDone && isPast;
+
+  // "בוצע" (status done) אינו שקול ל"שולם"! תור שחויב מחבילה נחשב מוסדר
+  // תמיד (כי כבר שולם מראש ברכישת החבילה). תור רגיל נחשב "שולם" רק אם
+  // ההכנסה המשויכת אליו בפועל מסומנת paid=true — לא רק כי הוא "בוצע".
+  const linkedIncome = isAppt && it.raw.incomeId ? incomeById[it.raw.incomeId] : null;
+  const isPaid = isDone && (!!it.raw.chargedFromPackage || linkedIncome?.paid === true);
 
   return (
     <div
@@ -313,13 +331,17 @@ function ItemRow({ it, onEditAppt, onCancelAppt, onResend, onClose, onEditEvent,
         </strong>
         <span className="muted">
           {isAppt ? it.subtitle : "אירוע"}
-          {isDone ? " · נסגר ✓" : isAppt && it.raw.inviteSent ? " · זימון נשלח" : ""}
+          {isDone ? "" : isAppt && it.raw.inviteSent ? " · זימון נשלח" : ""}
         </span>
       </div>
       <div className="list-item__actions">
         {isAppt ? (
           isDone ? (
-            <span className="badge badge--ok">שולם</span>
+            isPaid ? (
+              <span className="badge badge--ok">שולם</span>
+            ) : (
+              <span className="badge badge--warn">בוצע · לא שולם</span>
+            )
           ) : (
             <>
               {needsClosing && (

@@ -1,7 +1,14 @@
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useRepo, useSettingDoc } from "../../data";
-import { fillTemplate, inviteTokens, mailtoUrl, gcalUrl } from "../../utils/invite";
+import {
+  fillTemplate,
+  inviteTokens,
+  mailtoUrl,
+  gcalUrl,
+  DEFAULT_INVITATION_SUBJECT,
+  DEFAULT_INVITATION_BODY,
+} from "../../utils/invite";
 import { formatDateTime } from "../../utils/datetime";
 
 export default function SendInvite() {
@@ -31,8 +38,11 @@ export default function SendInvite() {
     );
 
   const tokens = inviteTokens({ business, clientName: appt.clientName, appt });
-  const subject = fillTemplate(invitation?.subject || "זימון לתור", tokens);
-  const baseBody = fillTemplate(invitation?.body || "", tokens);
+  // אם מסך ההגדרות "תוכן זימון" מעולם לא נשמר בפועל (המסמך לא קיים ב-Firestore),
+  // invitation?.subject/body הם undefined — נופלים לברירת מחדל מלאה בקוד, כדי
+  // שהמייל תמיד יכלול את כל פרטי התור ולא רק את הקישור ליומן.
+  const subject = fillTemplate(invitation?.subject || DEFAULT_INVITATION_SUBJECT, tokens);
+  const baseBody = fillTemplate(invitation?.body || DEFAULT_INVITATION_BODY, tokens);
 
   const title = `${appt.treatmentName} · ${business?.name || "קליניקה"}`;
   const calendarLink = gcalUrl({
@@ -47,7 +57,17 @@ export default function SendInvite() {
   const body = `${baseBody}\n\nלהוספת התור ליומן שלך:\n${calendarLink}`;
 
   function openMail() {
-    window.location.href = mailtoUrl(appt.email, subject, body);
+    const url = mailtoUrl(appt.email, subject, body);
+    // פתיחה דרך אלמנט <a> זמני + click(), במקום window.location.href ישירות.
+    // עוקף בעיה ידועה ב-PWA/WebView באנדרואיד: ניווט ישיר ל-mailto: דרך
+    // location.href לפעמים "בולע" את פרמטרי ה-subject/body ומעביר לאפליקציית
+    // המייל רק את כתובת הנמען, בלי כותרת ותוכן.
+    const link = document.createElement("a");
+    link.href = url;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
     repo.update(appt.id, { inviteSent: true });
   }
 
