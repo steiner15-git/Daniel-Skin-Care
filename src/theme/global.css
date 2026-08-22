@@ -94,6 +94,9 @@ textarea:focus {
   max-width: var(--maxw);
   margin: 0 auto;
   padding: 16px 16px calc(var(--nav-h) + env(safe-area-inset-bottom) + 24px);
+  /* רשת ביטחון: מונע גלישה אופקית של האפליקציה כולה אם רכיב פנימי (כמו
+     select שמתעלם מרוחב ה-CSS בדפדפני מובייל מסוימים) חורג מגבולותיו. */
+  overflow-x: hidden;
 }
 
 /* מפריד עלה-זהב מתחת לכותרות מסך */
@@ -585,15 +588,25 @@ textarea {
   overflow: auto;
 }
 .modal__close {
-  position: absolute;
-  top: 8px;
-  inset-inline-end: 8px;
+  /* מוצמד לחלון התצוגה עצמו (viewport) ולא לתוכן הנגלל של החלונית — כך
+     ה-X תמיד נשאר באותו מקום על המסך ונגיש, גם כשמגלגלים בתוך חלונית
+     ארוכה (למשל פרטי תמונה) שגובהה חורג מהמסך. */
+  position: fixed;
+  top: calc(14px + env(safe-area-inset-top));
+  inset-inline-end: calc(14px + env(safe-area-inset-right));
+  z-index: 101;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
-  background: none;
-  font-size: 24px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
-  color: var(--text-muted);
 }
 .modal__img {
   width: 100%;
@@ -773,12 +786,30 @@ textarea {
 }
 .toolbar__row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
+  /* תיקון: שורת סינון (למשל אלבום/הכנסות/הוצאות) עם כמה selects צמודים
+     נשברת לשורה נוספת במקום להיחתך מהמסגרת במסך צר */
+  flex-wrap: wrap;
 }
 .toolbar__row select {
   width: auto;
-  flex: 1;
+  flex: 1 1 110px;
+  min-width: 0;
+  /* מנטרל את עיצוב ה-select הטבעי (שבחלק מדפדפני המובייל מתרחב לפי אורך
+     הטקסט ומתעלם מהרוחב שה-CSS מגדיר) ומחליף בחץ מצויר, כך שהרוחב תמיד
+     נשמר והטקסט הארוך (כמו שם לקוחה) נחתך בשלוש נקודות במקום לגלוש */
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238B8177' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 8px center;
+  background-size: 15px;
+  padding-inline-start: 24px;
+  padding-inline-end: 8px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .fin-item {
@@ -1037,10 +1068,12 @@ textarea {
   gap: 6px;
   direction: ltr; /* שעה תמיד HH:MM משמאל לימין, גם בעמוד RTL */
   justify-content: flex-end;
+  min-width: 0;
 }
 .time-field select {
   width: auto;
   flex: 1;
+  min-width: 0;
   text-align: center;
 }
 .time-field__sep {
@@ -1051,11 +1084,34 @@ textarea {
 .date-field {
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 .date-field select {
   flex: 1;
   width: auto;
   min-width: 0;
+  /* תיקון גלישת שדה התאריך במובייל: בלי זה, חלק מדפדפני המובייל (בעיקר
+     Safari ב-iOS) מרחיבים select לפי אורך הטקסט הפנימי (למשל "ספטמבר")
+     ומתעלמים מהרוחב שה-CSS קבע — כך שהשורה כולה גולשת מחוץ למסגרת הכרטיס.
+     ניטרול העיצוב הטבעי + חץ מצויר משאירים את הרוחב תמיד תחת שליטת ה-CSS. */
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238B8177' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 6px center;
+  background-size: 14px;
+  padding-inline-start: 20px;
+  padding-inline-end: 6px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+@media (max-width: 380px) {
+  .date-field select {
+    font-size: 13px;
+    padding-inline-start: 16px;
+    padding-inline-end: 4px;
+  }
 }
 
 .signed-as {

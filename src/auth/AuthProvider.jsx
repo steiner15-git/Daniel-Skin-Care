@@ -48,7 +48,18 @@ export function AuthProvider({ children }) {
   // ומרבית שרשראות הרענון שלנו הן א-סינכרוניות. במקום זאת מוצג לחצן מפורש.
   const [driveNeedsReauth, setDriveNeedsReauth] = useState(false);
   const driveTokenRefreshAtRef = useRef(0);
-  const tokenRequestRef = useRef(null);
+  // מעקב אחר הטוקן העדכני ביותר בלי תלות ב-closure של state (driveToken
+  // בתוך useCallback/interval יכול להיות "תפוס" מרונדר ישן) — ref תמיד עדכני.
+  const driveTokenRef = useRef(null);
+  // נעילה משותפת אחת לכל נסיונות הרענון השקט — קריטי כי trySilentRefresh
+  // נקרא משלושה מקומות שונים (ensureDriveToken, הבדיקה הפרואקטיבית התקופתית,
+  // ומאזין ה-visibility/focus). ל-tokenClient הפנימי ב-googleDrive.js יש
+  // callback יחיד ומשותף — אם שתי קריאות רצות במקביל, השנייה דורסת את ה-
+  // callback של הראשונה והראשונה "נתקעת" עד ל-timeout ומחזירה false בטעות
+  // (מה שיכול להדליק את באנר driveNeedsReauth גם כשהרענון בפועל הצליח).
+  // נעילה יחידה מבטיחה שרק ניסיון רענון אחד רץ בכל רגע נתון, וכל שאר
+  // הקריאות המקבילות "רוכבות" על אותה תוצאה.
+  const refreshInFlightRef = useRef(null);
 
   useEffect(() => {
     if (DEV_USER) return; // דילוג על מנוי ההתחברות במצב תצוגה מקומי
@@ -60,35 +71,71 @@ export function AuthProvider({ children }) {
 
   function storeDriveToken(token, expiresInSec = 3600) {
     setDriveToken(token);
+    driveTokenRef.current = token;
     driveTokenRefreshAtRef.current = token
       ? Date.now() + expiresInSec * 1000 - TOKEN_REFRESH_BUFFER_MS
       : 0;
     if (token) setDriveNeedsReauth(false);
   }
 
-  // ניסיון רענון שקט יחיד (ללא פופ-אפ). מחזיר true בהצלחה.
+  function isStillFresh() {
+    return !!driveTokenRef.current && Date.now() < driveTokenRefreshAtRef.current;
+  }
+
+  // ניסיון רענון שקט (ללא פופ-אפ), עם נעילה משותפת כך שרק ריצה אחת בפועל
+  // מתבצעת בכל זמן נתון — כל קריאה נוספת שמגיעה תוך כדי ריצה קיימת "מצטרפת"
+  // לאותה הבטחה במקום לפתוח בקשה מקבילה נוספת שתדרוס את ה-callback המשותף.
+  // מחזיר true בהצלחה.
   const trySilentRefresh = useCallback(async () => {
     if (DEV_USER) return false;
-    const silent = await silentDriveToken(DRIVE_CLIENT_ID);
-    if (silent?.token) {
-      storeDriveToken(silent.token, silent.expiresIn);
-      return true;
-    }
-    return false;
+
+    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+
+    refreshInFlightRef.current = (async () => {
+      try {
+        const silent = await silentDriveToken(DRIVE_CLIENT_ID);
+        if (silent?.token) {
+          storeDriveToken(silent.token, silent.expiresIn);
+          return true;
+        }
+        return false;
+      } finally {
+        refreshInFlightRef.current = null;
+      }
+    })();
+
+    return refreshInFlightRef.current;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // רענון פרואקטיבי ברקע: מתבצע מיד כשיש משתמשת מחוברת, וחוזר על עצמו כל
   // PROACTIVE_CHECK_INTERVAL_MS — כדי שברוב המקרים, כשמגיע רגע שבו המשתמשת
   // באמת צריכה להעלות/להוריד קובץ מ-Drive, כבר יש טוקן טרי מוכן וממתין.
+  // כמו כן מרעננים מיד כשהטאב/האפליקציה חוזרים לחזית (visibilitychange/
+  // focus) — תופס במהירות מקרה שבו הטלפון היה נעול/ברקע זמן רב, במקום
+  // לחכות ל-tick הבא של האינטרוול (עד 20 דקות).
   useEffect(() => {
     if (DEV_USER || !user) return;
+
     trySilentRefresh();
-    const interval = setInterval(() => {
-      const stillFresh = driveToken && Date.now() < driveTokenRefreshAtRef.current;
-      if (!stillFresh) trySilentRefresh();
-    }, PROACTIVE_CHECK_INTERVAL_MS);
-    return () => clearInterval(interval);
+
+    function refreshIfStale() {
+      if (!isStillFresh()) trySilentRefresh();
+    }
+
+    const interval = setInterval(refreshIfStale, PROACTIVE_CHECK_INTERVAL_MS);
+
+    function onVisibility() {
+      if (document.visibilityState === "visible") refreshIfStale();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", refreshIfStale);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", refreshIfStale);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -105,7 +152,8 @@ export function AuthProvider({ children }) {
 
   // מחזיר access token תקף ל-Drive:
   // 1. טוקן קיים ועדיין בתוקף (לפי המעקב שלנו) → מוחזר מיד.
-  // 2. אחרת מנסה רענון שקט פעם אחת.
+  // 2. אחרת מנסה רענון שקט (משתף נעילה עם כל קריאה מקבילה אחרת — ראו
+  //    trySilentRefresh לעיל).
   // 3. אם גם זה נכשל → מדליק driveNeedsReauth ומחזיר null. לא מנסה פופ-אפ
   //    אוטומטית כאן (ראו הערה למעלה) — הקוד הקורא צריך להתמודד עם null
   //    בעדינות (כפי שכבר עושה, למשל storeImage שזורק שגיאה ידידותית),
@@ -113,22 +161,13 @@ export function AuthProvider({ children }) {
   async function ensureDriveToken() {
     if (DEV_USER) return null;
 
-    const stillFresh = driveToken && Date.now() < driveTokenRefreshAtRef.current;
-    if (stillFresh) return driveToken;
+    if (isStillFresh()) return driveTokenRef.current;
 
-    if (tokenRequestRef.current) return tokenRequestRef.current;
+    const ok = await trySilentRefresh();
+    if (ok) return driveTokenRef.current;
 
-    tokenRequestRef.current = (async () => {
-      try {
-        const ok = await trySilentRefresh();
-        if (ok) return driveToken;
-        setDriveNeedsReauth(true);
-        return null;
-      } finally {
-        tokenRequestRef.current = null;
-      }
-    })();
-    return tokenRequestRef.current;
+    setDriveNeedsReauth(true);
+    return null;
   }
 
   // התחברות מחדש מפורשת ל-Drive. יש לקרוא לפונקציה הזו ישירות מתוך onClick
