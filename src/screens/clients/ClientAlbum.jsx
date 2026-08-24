@@ -3,6 +3,8 @@ import { useCollectionData, useRepo, useSettingDoc, IS_LOCAL } from "../../data"
 import { useAuth } from "../../auth/AuthProvider";
 import { storeImage, deletePhoto } from "../../data/photos";
 import { useImageSrc } from "../../data/useImageSrc";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import PhotoDetailModal from "../../components/PhotoDetailModal";
 
 function todayInput() {
@@ -18,17 +20,22 @@ export default function ClientAlbum({ clientId, clientName }) {
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const treatmentNames = (treatmentsDoc?.items ?? []).map((t) => t.name);
   const { ensureDriveToken } = useAuth();
+  const confirmDialog = useConfirm();
+  const toast = useToast();
   const fileRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null);
+  // תמונות שנמחקו אופטימית ל-Undo (מוסתרות מה-UI, נמחקות בפועל רק לאחר 5
+  // שניות אם לא נלחץ "ביטול" — ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
   const mine = useMemo(
     () =>
       items
-        .filter((p) => p.clientId === clientId)
+        .filter((p) => p.clientId === clientId && !hiddenIds.has(p.id))
         .sort((a, b) => (a.date || "").localeCompare(b.date || "")),
-    [items, clientId]
+    [items, clientId, hiddenIds]
   );
 
   const openPhoto = mine.find((p) => p.id === openId) || null;
@@ -60,17 +67,35 @@ export default function ClientAlbum({ clientId, clientName }) {
   }
 
   async function removePhoto(p) {
-    if (!confirm("למחוק את התמונה?")) return;
+    const ok = await confirmDialog({
+      title: "מחיקת תמונה",
+      message: "למחוק את התמונה?",
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
     setOpenId(null);
-    await repo.remove(p.id);
-    if (!IS_LOCAL && p.driveFileId) {
-      try {
-        const token = await ensureDriveToken();
-        if (token) await deletePhoto(token, p.driveFileId);
-      } catch {
-        /* מחיקת הקובץ מ-Drive נכשלה — המטא-דאטה כבר הוסרה */
-      }
-    }
+    setHiddenIds((prev) => new Set(prev).add(p.id));
+    toast.showUndo({
+      message: "התמונה נמחקה",
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(p.id);
+          return next;
+        }),
+      onExpire: async () => {
+        await repo.remove(p.id);
+        if (!IS_LOCAL && p.driveFileId) {
+          try {
+            const token = await ensureDriveToken();
+            if (token) await deletePhoto(token, p.driveFileId);
+          } catch {
+            /* מחיקת הקובץ מ-Drive נכשלה — המטא-דאטה כבר הוסרה */
+          }
+        }
+      },
+    });
   }
 
   return (

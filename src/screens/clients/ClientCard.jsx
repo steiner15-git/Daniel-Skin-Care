@@ -5,6 +5,8 @@ import ClientBasicFields from "./ClientBasicFields";
 import DiagnosisSummary from "./DiagnosisSummary";
 import ClientAlbum from "./ClientAlbum";
 import { useCollectionData, useRepo, useAuditLog } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import { fullName, ageFromBirthday, normalizePhone } from "./clientUtils";
 
 const TABS = [
@@ -20,6 +22,7 @@ export default function ClientCard() {
   const { items: appts } = useCollectionData("appointments");
   const repo = useRepo("clients");
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
 
   const client = clients.find((c) => c.id === id);
   const [tab, setTab] = useState("details");
@@ -55,7 +58,13 @@ export default function ClientCard() {
     setEditing(false);
   }
   async function archive() {
-    if (!confirm("להעביר את הלקוחה לארכיון? היסטוריית התורים תישמר.")) return;
+    const ok = await confirmDialog({
+      title: "שליחה לארכיון",
+      message: "להעביר את הלקוחה לארכיון? היסטוריית התורים תישמר.",
+      confirmLabel: "העברה לארכיון",
+      danger: true,
+    });
+    if (!ok) return;
     await repo.update(id, { archived: true });
     await log({
       action: "client_archive",
@@ -229,8 +238,13 @@ function packageState(p) {
 function PackagesSection({ packages }) {
   const repo = useRepo("clientPackages");
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
+  const toast = useToast();
   const [editId, setEditId] = useState(null);
   const [draft, setDraft] = useState(null);
+  // חבילות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const visiblePackages = packages.filter((p) => !hiddenIds.has(p.id));
 
   function startEdit(p) {
     setEditId(p.id);
@@ -258,15 +272,33 @@ function PackagesSection({ packages }) {
     setDraft(null);
   }
   async function remove(p) {
-    if (!confirm(`למחוק את החבילה "${p.seriesName}"? ההכנסה מהרכישה לא תיפגע.`)) return;
-    await repo.remove(p.id);
-    await log({
-      action: "package_delete",
-      entity: { type: "clientPackage", id: p.id, desc: `${p.clientName} — ${p.seriesName}` },
+    const ok = await confirmDialog({
+      title: "מחיקת חבילה",
+      message: `למחוק את החבילה "${p.seriesName}"? ההכנסה מהרכישה לא תיפגע.`,
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(p.id));
+    toast.showUndo({
+      message: `החבילה "${p.seriesName}" נמחקה`,
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(p.id);
+          return next;
+        }),
+      onExpire: async () => {
+        await repo.remove(p.id);
+        await log({
+          action: "package_delete",
+          entity: { type: "clientPackage", id: p.id, desc: `${p.clientName} — ${p.seriesName}` },
+        });
+      },
     });
   }
 
-  if (packages.length === 0) {
+  if (visiblePackages.length === 0) {
     return (
       <div className="packages-band">
         <span className="muted">חבילות/סדרות</span>
@@ -277,7 +309,7 @@ function PackagesSection({ packages }) {
 
   return (
     <div className="list" style={{ marginBottom: 8 }}>
-      {packages.map((p) =>
+      {visiblePackages.map((p) =>
         editId === p.id ? (
           <div key={p.id} className="card list-item--edit">
             <strong>{p.seriesName}</strong>

@@ -5,6 +5,8 @@ import { useCollectionData, useRepo, useSettingDoc, IS_LOCAL } from "../data";
 import { useAuth } from "../auth/AuthProvider";
 import { storeImage, deletePhoto } from "../data/photos";
 import { useImageSrc } from "../data/useImageSrc";
+import { useConfirm } from "../context/ConfirmDialogProvider";
+import { useToast } from "../context/ToastProvider";
 import { fullName } from "./clients/clientUtils";
 
 function todayInput() {
@@ -20,6 +22,8 @@ export default function AllPhotos() {
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const repo = useRepo("photos");
   const { ensureDriveToken } = useAuth();
+  const confirmDialog = useConfirm();
+  const toast = useToast();
   const [openId, setOpenId] = useState(null);
 
   const fileRef = useRef(null);
@@ -30,6 +34,8 @@ export default function AllPhotos() {
   const [clientFilter, setClientFilter] = useState("");
   const [treatmentFilter, setTreatmentFilter] = useState("");
   const [sortDir, setSortDir] = useState("desc");
+  // תמונות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
   const treatmentNames = (treatmentsDoc?.items ?? []).map((t) => t.name);
 
@@ -44,6 +50,7 @@ export default function AllPhotos() {
     return photos
       .map((p) => ({ ...p, clientName: p.clientId ? clientName[p.clientId] || "לקוחה לא ידועה" : "" }))
       .filter((p) => {
+        if (hiddenIds.has(p.id)) return false;
         if (clientFilter && p.clientId !== clientFilter) return false;
         if (treatmentFilter && (p.treatmentName || "") !== treatmentFilter) return false;
         if (term) {
@@ -56,7 +63,7 @@ export default function AllPhotos() {
         const cmp = (a.date || "").localeCompare(b.date || "");
         return sortDir === "asc" ? cmp : -cmp;
       });
-  }, [photos, clientName, q, clientFilter, treatmentFilter, sortDir]);
+  }, [photos, clientName, q, clientFilter, treatmentFilter, sortDir, hiddenIds]);
 
   const openPhoto = view.find((p) => p.id === openId) || null;
 
@@ -106,17 +113,35 @@ export default function AllPhotos() {
   }
 
   async function removePhoto(p) {
-    if (!confirm("למחוק את התמונה?")) return;
+    const ok = await confirmDialog({
+      title: "מחיקת תמונה",
+      message: "למחוק את התמונה?",
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
     setOpenId(null);
-    await repo.remove(p.id);
-    if (!IS_LOCAL && p.driveFileId) {
-      try {
-        const token = await ensureDriveToken();
-        if (token) await deletePhoto(token, p.driveFileId);
-      } catch {
-        /* מחיקת הקובץ מ-Drive נכשלה — המטא-דאטה כבר הוסרה */
-      }
-    }
+    setHiddenIds((prev) => new Set(prev).add(p.id));
+    toast.showUndo({
+      message: "התמונה נמחקה",
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(p.id);
+          return next;
+        }),
+      onExpire: async () => {
+        await repo.remove(p.id);
+        if (!IS_LOCAL && p.driveFileId) {
+          try {
+            const token = await ensureDriveToken();
+            if (token) await deletePhoto(token, p.driveFileId);
+          } catch {
+            /* מחיקת הקובץ מ-Drive נכשלה — המטא-דאטה כבר הוסרה */
+          }
+        }
+      },
+    });
   }
 
   return (

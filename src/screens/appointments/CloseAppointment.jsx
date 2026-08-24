@@ -4,6 +4,7 @@ import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
 import { formatDateTime } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 function todayInput() {
   const d = new Date();
@@ -25,6 +26,7 @@ export default function CloseAppointment() {
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
 
   const appt = appts.find((a) => a.id === id);
   const [amount, setAmount] = useState(null);
@@ -99,7 +101,13 @@ export default function CloseAppointment() {
   }
 
   async function cancelAppt() {
-    if (!confirm("לבטל את התור? לא תיווצר הכנסה (למשל: הלקוחה לא הגיעה).")) return;
+    const ok = await confirmDialog({
+      title: "ביטול תור",
+      message: "לבטל את התור? לא תיווצר הכנסה (למשל: הלקוחה לא הגיעה).",
+      confirmLabel: "ביטול תור",
+      danger: true,
+    });
+    if (!ok) return;
     await apptRepo.update(appt.id, { status: "cancelled" });
     navigate(backTo);
   }
