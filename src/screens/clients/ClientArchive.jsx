@@ -50,7 +50,7 @@ export default function ClientArchive() {
             <div key={c.id} className="card list-item">
               <div className="list-item__main">
                 <strong>{fullName(c)}</strong>
-                {c.phone && <span className="muted" dir="ltr">{c.phone}</span>}
+                {c.phone && <span className="muted sensitive" dir="ltr">{c.phone}</span>}
               </div>
               <div className="list-item__actions">
                 <button className="btn btn--ghost" onClick={() => restore(c)}>

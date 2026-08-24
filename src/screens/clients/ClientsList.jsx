@@ -58,7 +58,7 @@ export default function ClientsList() {
             <Link key={c.id} to={`/clients/${c.id}`} className="card list-item">
               <div className="list-item__main">
                 <strong>{fullName(c)}</strong>
-                {c.phone && <span className="muted" dir="ltr">{c.phone}</span>}
+                {c.phone && <span className="muted sensitive" dir="ltr">{c.phone}</span>}
               </div>
               <span className="nav-card__chev">‹</span>
             </Link>

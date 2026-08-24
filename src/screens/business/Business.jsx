@@ -7,6 +7,7 @@ import { formatILS, HEB_MONTHS } from "../../utils/money";
 import { formatDate } from "../../utils/datetime";
 import { exportYearReport } from "../../utils/exportXlsx";
 import { ReceiptBadge, hasReceipt } from "../../components/ReceiptField";
+import { useClinicMode } from "../../context/ClinicModeProvider";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const CURRENT_MONTH = new Date().getMonth();
@@ -45,6 +46,7 @@ export default function Business() {
 }
 
 function Summary({ income, expenses }) {
+  const { enabled: clinicMode } = useClinicMode();
   const [year, setYear] = useState(CURRENT_YEAR);
   const [month, setMonth] = useState(CURRENT_MONTH);
   const [mode, setMode] = useState("month");
@@ -61,6 +63,16 @@ function Summary({ income, expenses }) {
     }
     return arr;
   }, [income, expenses, year]);
+
+  // מצב קליניקה פעיל: מסתירים לגמרי את תוכן הסיכום הכספי (לא רק מטשטשים) —
+  // הטאבים עצמם נשארים זמינים לניווט.
+  if (clinicMode) {
+    return (
+      <div className="clinic-summary-hidden">
+        מצב קליניקה פעיל — כבי אותו (אייקון העין למעלה) כדי לראות סיכום כספי.
+      </div>
+    );
+  }
 
   const scope =
     mode === "year"
@@ -136,6 +148,7 @@ function Summary({ income, expenses }) {
 
 /* ---------- הכנסות ---------- */
 function IncomeTab({ income, initialMissing = "" }) {
+  const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
   const apptRepo = useRepo("appointments");
@@ -154,8 +167,11 @@ function IncomeTab({ income, initialMissing = "" }) {
   const [sortBy, setSortBy] = useState("date");
 
   const list = useMemo(() => {
-    let l = income.slice();
     const term = q.trim();
+    // מצב קליניקה: הרשימה ריקה כברירת מחדל, ומוצגת רק כתוצאה של חיפוש
+    // טקסטואלי פעיל — שאר הפילטרים פועלים רק אחרי שיש טקסט בחיפוש.
+    if (clinicMode && !term) return [];
+    let l = income.slice();
     if (term)
       l = l.filter((r) =>
         [r.clientName, r.treatmentName, r.note, r.invoiceNumber]
@@ -178,7 +194,7 @@ function IncomeTab({ income, initialMissing = "" }) {
       return new Date(b.date) - new Date(a.date);
     });
     return l;
-  }, [income, q, status, method, from, to, receipt, missing, sortBy]);
+  }, [income, q, status, method, from, to, receipt, missing, sortBy, clinicMode]);
 
   async function togglePaid(r) {
     const paid = !r.paid;
@@ -301,14 +317,18 @@ function IncomeTab({ income, initialMissing = "" }) {
       </div>
 
       {list.length === 0 ? (
-        <div className="empty-state">אין הכנסות להצגה.</div>
+        <div className="empty-state">
+          {clinicMode && !q.trim()
+            ? "מצב קליניקה פעיל — חפשי כדי להציג הכנסות."
+            : "אין הכנסות להצגה."}
+        </div>
       ) : (
         <div className="list">
           {list.map((r) => (
             <div key={r.id} className="card fin-item">
               <div className="fin-item__main">
                 <div className="fin-item__top">
-                  <strong>{formatILS(r.amount)}</strong>
+                  <strong className="sensitive">{formatILS(r.amount)}</strong>
                   <span className={"badge " + (r.paid ? "badge--ok" : "badge--warn")}>
                     {r.paid ? "שולם" : "לא שולם"}
                   </span>
@@ -352,6 +372,7 @@ function IncomeTab({ income, initialMissing = "" }) {
 
 /* ---------- הוצאות ---------- */
 function ExpenseTab({ expenses }) {
+  const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("expenses");
   const log = useAuditLog();
@@ -365,8 +386,11 @@ function ExpenseTab({ expenses }) {
   const [sortBy, setSortBy] = useState("date");
 
   const list = useMemo(() => {
-    let l = expenses.slice();
     const term = q.trim();
+    // מצב קליניקה: הרשימה ריקה כברירת מחדל, ומוצגת רק כתוצאה של חיפוש
+    // טקסטואלי פעיל — שאר הפילטרים פועלים רק אחרי שיש טקסט בחיפוש.
+    if (clinicMode && !term) return [];
+    let l = expenses.slice();
     if (term)
       l = l.filter((r) =>
         [r.description, r.businessName, r.category, r.invoiceNumber]
@@ -384,7 +408,7 @@ function ExpenseTab({ expenses }) {
       return new Date(b.date) - new Date(a.date);
     });
     return l;
-  }, [expenses, q, category, from, to, receipt, sortBy]);
+  }, [expenses, q, category, from, to, receipt, sortBy, clinicMode]);
 
   async function remove(r) {
     if (!confirm("למחוק את ההוצאה?")) return;
@@ -435,14 +459,18 @@ function ExpenseTab({ expenses }) {
       </div>
 
       {list.length === 0 ? (
-        <div className="empty-state">אין הוצאות להצגה.</div>
+        <div className="empty-state">
+          {clinicMode && !q.trim()
+            ? "מצב קליניקה פעיל — חפשי כדי להציג הוצאות."
+            : "אין הוצאות להצגה."}
+        </div>
       ) : (
         <div className="list">
           {list.map((r) => (
             <div key={r.id} className="card fin-item">
               <div className="fin-item__main">
                 <div className="fin-item__top">
-                  <strong>{formatILS(r.total)}</strong>
+                  <strong className="sensitive">{formatILS(r.total)}</strong>
                   {r.recurring && <span className="badge badge--info">קבועה · {r.recurring === "yearly" ? "שנתי" : "חודשי"}</span>}
                   <ReceiptBadge value={r} />
                 </div>

@@ -142,8 +142,8 @@ function DetailsTab({
     <>
       <div className="card">
         <ReadRow label="שם" value={fullName(client)} />
-        <ReadRow label="טלפון" value={client.phone || "—"} ltr />
-        <ReadRow label="אימייל" value={client.email || "—"} ltr />
+        <ReadRow label="טלפון" value={client.phone || "—"} ltr sensitive />
+        <ReadRow label="אימייל" value={client.email || "—"} ltr sensitive />
         <ReadRow
           label="זימון במייל"
           value={client.emailInvite ? "מעוניינת" : "לא מעוניינת"}
@@ -156,7 +156,7 @@ function DetailsTab({
         {client.notes && (
           <div className="read-row read-row--col">
             <span className="muted">הערות פנימיות חסויות</span>
-            <span style={{ whiteSpace: "pre-wrap" }}>{client.notes}</span>
+            <span className="sensitive" style={{ whiteSpace: "pre-wrap" }}>{client.notes}</span>
           </div>
         )}
       </div>
@@ -353,11 +353,13 @@ function ApptList({ list }) {
   );
 }
 
-function ReadRow({ label, value, ltr }) {
+function ReadRow({ label, value, ltr, sensitive }) {
   return (
     <div className="read-row">
       <span className="muted">{label}</span>
-      <span dir={ltr ? "ltr" : undefined}>{value}</span>
+      <span dir={ltr ? "ltr" : undefined} className={sensitive ? "sensitive" : undefined}>
+        {value}
+      </span>
     </div>
   );
 }

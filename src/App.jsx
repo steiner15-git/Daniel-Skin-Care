@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import RequireAuth from "./auth/RequireAuth";
+import { ClinicModeProvider } from "./context/ClinicModeProvider";
 import { useAutoBackup } from "./data/useAutoBackup";
 import { useRecurringExpenses } from "./data/useRecurringExpenses";
 import { useSettingDoc } from "./data";
@@ -60,6 +61,7 @@ export default function App() {
   return (
     <AuthProvider>
       <RequireAuth>
+        <ClinicModeProvider>
         <AutoBackup />
         <RecurringExpenses />
         <LogoCache />
@@ -108,6 +110,7 @@ path="series/:id/purchase" element={<SeriesPurchase />} />
             </Route>
           </Routes>
         </BrowserRouter>
+        </ClinicModeProvider>
       </RequireAuth>
     </AuthProvider>
   );
