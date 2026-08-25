@@ -7,6 +7,9 @@ import { formatILS, HEB_MONTHS } from "../../utils/money";
 import { formatDate } from "../../utils/datetime";
 import { exportYearReport } from "../../utils/exportXlsx";
 import { ReceiptBadge, hasReceipt } from "../../components/ReceiptField";
+import { useClinicMode } from "../../context/ClinicModeProvider";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const CURRENT_MONTH = new Date().getMonth();
@@ -45,6 +48,7 @@ export default function Business() {
 }
 
 function Summary({ income, expenses }) {
+  const { enabled: clinicMode } = useClinicMode();
   const [year, setYear] = useState(CURRENT_YEAR);
   const [month, setMonth] = useState(CURRENT_MONTH);
   const [mode, setMode] = useState("month");
@@ -61,6 +65,16 @@ function Summary({ income, expenses }) {
     }
     return arr;
   }, [income, expenses, year]);
+
+  // מצב קליניקה פעיל: מסתירים לגמרי את תוכן הסיכום הכספי (לא רק מטשטשים) —
+  // הטאבים עצמם נשארים זמינים לניווט.
+  if (clinicMode) {
+    return (
+      <div className="clinic-summary-hidden">
+        מצב קליניקה פעיל — כבי אותו (אייקון העין למעלה) כדי לראות סיכום כספי.
+      </div>
+    );
+  }
 
   const scope =
     mode === "year"
@@ -136,12 +150,15 @@ function Summary({ income, expenses }) {
 
 /* ---------- הכנסות ---------- */
 function IncomeTab({ income, initialMissing = "" }) {
+  const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
   const apptRepo = useRepo("appointments");
   const packageRepo = useRepo("clientPackages");
   const { items: packages } = useCollectionData("clientPackages");
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
+  const toast = useToast();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [];
   const [q, setQ] = useState("");
@@ -152,10 +169,16 @@ function IncomeTab({ income, initialMissing = "" }) {
   const [to, setTo] = useState("");
   const [receipt, setReceipt] = useState(""); // "" | with | without
   const [sortBy, setSortBy] = useState("date");
+  // הכנסות שנמחקו אופטימית ל-Undo (רק מחיקות "פשוטות" ללא side-effects —
+  // ראו remove() למטה. ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
   const list = useMemo(() => {
-    let l = income.slice();
     const term = q.trim();
+    // מצב קליניקה: הרשימה ריקה כברירת מחדל, ומוצגת רק כתוצאה של חיפוש
+    // טקסטואלי פעיל — שאר הפילטרים פועלים רק אחרי שיש טקסט בחיפוש.
+    if (clinicMode && !term) return [];
+    let l = income.slice().filter((r) => !hiddenIds.has(r.id));
     if (term)
       l = l.filter((r) =>
         [r.clientName, r.treatmentName, r.note, r.invoiceNumber]
@@ -178,7 +201,7 @@ function IncomeTab({ income, initialMissing = "" }) {
       return new Date(b.date) - new Date(a.date);
     });
     return l;
-  }, [income, q, status, method, from, to, receipt, missing, sortBy]);
+  }, [income, q, status, method, from, to, receipt, missing, sortBy, clinicMode, hiddenIds]);
 
   async function togglePaid(r) {
     const paid = !r.paid;
@@ -192,59 +215,96 @@ function IncomeTab({ income, initialMissing = "" }) {
   }
 
   // מחיקת הכנסה משויכת לתור/סדרה עלולה להשאיר "יתום" ביומן/בכרטיסיית הלקוחה
-  // אם לא מטופלת במפורש — לכן שואלים על כך בנפרד לפני מחיקת ההכנסה עצמה.
-  async function handleLinkedRecords(r) {
-    // הכנסה מתור רגיל — לשאול האם למחוק גם את התור (מהיומן ומרשימת הלקוחה)
+  // אם לא מטופלת במפורש. השאלות ("למחוק גם את...") נשאלות מיד (דורשות קלט
+  // מהמשתמשת ולא ניתנות לדחייה), אבל הביצוע בפועל נדחה יחד עם שאר ה-Undo —
+  // כך שגם מחיקת הכנסה עם רשומות מקושרות ניתנת לביטול תוך 5 שניות.
+  async function planLinkedRecords(r) {
     if (r.source === "appointment" && r.appointmentId) {
-      const alsoDeleteAppt = confirm(
-        "האם למחוק גם את התור המשויך מהיומן ומרשימת התורים של הלקוחה?"
-      );
-      if (alsoDeleteAppt) {
-        try {
-          await apptRepo.remove(r.appointmentId);
-          await log({
-            action: "appointment_delete",
-            entity: {
-              type: "appointment",
-              id: r.appointmentId,
-              desc: `${r.treatmentName || "תור"}${r.clientName ? ` · ${r.clientName}` : ""}`,
-            },
-          });
-        } catch {
-          /* התור כבר לא קיים / מחיקתו נכשלה — ההכנסה עדיין תימחק בהמשך */
-        }
-      }
-      return;
+      const alsoDeleteAppt = await confirmDialog({
+        title: "מחיקת תור משויך",
+        message: "האם למחוק גם את התור המשויך מהיומן ומרשימת התורים של הלקוחה?",
+        confirmLabel: "מחיקה",
+        danger: true,
+      });
+      return { deleteAppointment: alsoDeleteAppt };
     }
 
-    // הכנסה מרכישת סדרה/חבילה — לשאול האם למחוק גם את החבילה
     if (r.source === "series") {
       const pkg = packages.find((p) => p.incomeId === r.id);
-      if (!pkg) return;
+      if (!pkg) return {};
       const usedSome = (pkg.remainingSessions ?? 0) < (pkg.totalSessions ?? 0);
       const question = usedSome
         ? `החבילה "${pkg.seriesName}" כבר נוצלה חלקית (נותרו ${pkg.remainingSessions}/${pkg.totalSessions} מפגשים). האם למחוק אותה בכל זאת? תורים שכבר חויבו ממנה יישארו מתויגים "מחבילה" בהיסטוריה, ללא חבילה פעילה מאחוריהם.`
         : `האם למחוק גם את החבילה "${pkg.seriesName}" מכרטיסיית הלקוחה?`;
-      if (confirm(question)) {
-        await packageRepo.remove(pkg.id);
+      const alsoDeletePkg = await confirmDialog({
+        title: "מחיקת חבילה משויכת",
+        message: question,
+        confirmLabel: "מחיקה",
+        danger: true,
+      });
+      return { deletePackage: alsoDeletePkg ? pkg : null };
+    }
+
+    return {};
+  }
+
+  async function executeLinkedRecords(r, plan) {
+    if (plan.deleteAppointment) {
+      try {
+        await apptRepo.remove(r.appointmentId);
         await log({
-          action: "package_delete",
-          entity: { type: "clientPackage", id: pkg.id, desc: `${pkg.clientName} — ${pkg.seriesName}` },
+          action: "appointment_delete",
+          entity: {
+            type: "appointment",
+            id: r.appointmentId,
+            desc: `${r.treatmentName || "תור"}${r.clientName ? ` · ${r.clientName}` : ""}`,
+          },
         });
+      } catch {
+        /* התור כבר לא קיים / מחיקתו נכשלה — ההכנסה עדיין תימחק */
       }
+    }
+    if (plan.deletePackage) {
+      const pkg = plan.deletePackage;
+      await packageRepo.remove(pkg.id);
+      await log({
+        action: "package_delete",
+        entity: { type: "clientPackage", id: pkg.id, desc: `${pkg.clientName} — ${pkg.seriesName}` },
+      });
     }
   }
 
   async function remove(r) {
     if (r.paid) return;
-    if (!confirm("למחוק את ההכנסה?")) return;
+    const ok = await confirmDialog({
+      title: "מחיקת הכנסה",
+      message: "למחוק את ההכנסה?",
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
 
-    await handleLinkedRecords(r);
+    // שאלות על רשומות מקושרות (תור/חבילה) נשאלות מיד — הן דורשות החלטה
+    // מהמשתמשת ולא ניתן לדחות אותן ל-5 השניות של ה-Undo.
+    const plan = await planLinkedRecords(r);
 
-    await repo.remove(r.id);
-    await log({
-      action: "income_delete",
-      entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
+    setHiddenIds((prev) => new Set(prev).add(r.id));
+    toast.showUndo({
+      message: "ההכנסה נמחקה",
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(r.id);
+          return next;
+        }),
+      onExpire: async () => {
+        await executeLinkedRecords(r, plan);
+        await repo.remove(r.id);
+        await log({
+          action: "income_delete",
+          entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
+        });
+      },
     });
   }
 
@@ -301,14 +361,18 @@ function IncomeTab({ income, initialMissing = "" }) {
       </div>
 
       {list.length === 0 ? (
-        <div className="empty-state">אין הכנסות להצגה.</div>
+        <div className="empty-state">
+          {clinicMode && !q.trim()
+            ? "מצב קליניקה פעיל — חפשי כדי להציג הכנסות."
+            : "אין הכנסות להצגה."}
+        </div>
       ) : (
         <div className="list">
           {list.map((r) => (
             <div key={r.id} className="card fin-item">
               <div className="fin-item__main">
                 <div className="fin-item__top">
-                  <strong>{formatILS(r.amount)}</strong>
+                  <strong className="sensitive">{formatILS(r.amount)}</strong>
                   <span className={"badge " + (r.paid ? "badge--ok" : "badge--warn")}>
                     {r.paid ? "שולם" : "לא שולם"}
                   </span>
@@ -352,9 +416,12 @@ function IncomeTab({ income, initialMissing = "" }) {
 
 /* ---------- הוצאות ---------- */
 function ExpenseTab({ expenses }) {
+  const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("expenses");
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
+  const toast = useToast();
   const { data: catDoc } = useSettingDoc("expenseCategories");
   const categories = catDoc?.items ?? [];
   const [q, setQ] = useState("");
@@ -363,10 +430,15 @@ function ExpenseTab({ expenses }) {
   const [to, setTo] = useState("");
   const [receipt, setReceipt] = useState(""); // "" | with | without
   const [sortBy, setSortBy] = useState("date");
+  // הוצאות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
   const list = useMemo(() => {
-    let l = expenses.slice();
     const term = q.trim();
+    // מצב קליניקה: הרשימה ריקה כברירת מחדל, ומוצגת רק כתוצאה של חיפוש
+    // טקסטואלי פעיל — שאר הפילטרים פועלים רק אחרי שיש טקסט בחיפוש.
+    if (clinicMode && !term) return [];
+    let l = expenses.slice().filter((r) => !hiddenIds.has(r.id));
     if (term)
       l = l.filter((r) =>
         [r.description, r.businessName, r.category, r.invoiceNumber]
@@ -384,14 +456,32 @@ function ExpenseTab({ expenses }) {
       return new Date(b.date) - new Date(a.date);
     });
     return l;
-  }, [expenses, q, category, from, to, receipt, sortBy]);
+  }, [expenses, q, category, from, to, receipt, sortBy, clinicMode, hiddenIds]);
 
   async function remove(r) {
-    if (!confirm("למחוק את ההוצאה?")) return;
-    await repo.remove(r.id);
-    await log({
-      action: "expense_delete",
-      entity: { type: "expense", id: r.id, desc: `${r.description || "הוצאה"} · ${formatILS(r.total)}` },
+    const ok = await confirmDialog({
+      title: "מחיקת הוצאה",
+      message: "למחוק את ההוצאה?",
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(r.id));
+    toast.showUndo({
+      message: "ההוצאה נמחקה",
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(r.id);
+          return next;
+        }),
+      onExpire: async () => {
+        await repo.remove(r.id);
+        await log({
+          action: "expense_delete",
+          entity: { type: "expense", id: r.id, desc: `${r.description || "הוצאה"} · ${formatILS(r.total)}` },
+        });
+      },
     });
   }
 
@@ -435,14 +525,18 @@ function ExpenseTab({ expenses }) {
       </div>
 
       {list.length === 0 ? (
-        <div className="empty-state">אין הוצאות להצגה.</div>
+        <div className="empty-state">
+          {clinicMode && !q.trim()
+            ? "מצב קליניקה פעיל — חפשי כדי להציג הוצאות."
+            : "אין הוצאות להצגה."}
+        </div>
       ) : (
         <div className="list">
           {list.map((r) => (
             <div key={r.id} className="card fin-item">
               <div className="fin-item__main">
                 <div className="fin-item__top">
-                  <strong>{formatILS(r.total)}</strong>
+                  <strong className="sensitive">{formatILS(r.total)}</strong>
                   {r.recurring && <span className="badge badge--info">קבועה · {r.recurring === "yearly" ? "שנתי" : "חודשי"}</span>}
                   <ReceiptBadge value={r} />
                 </div>

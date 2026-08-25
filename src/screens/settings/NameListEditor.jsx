@@ -1,6 +1,8 @@
 import { useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 
 function newId(p) {
   return `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -16,27 +18,49 @@ export default function NameListEditor({
 }) {
   const { data, loading, save } = useSettingDoc(docKey);
   const items = data?.items ?? null;
-  const list = items ?? defaults.map((name) => ({ id: newId(docKey), name }));
+  const fullList = items ?? defaults.map((name) => ({ id: newId(docKey), name }));
+  const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [draft, setDraft] = useState("");
   const [editId, setEditId] = useState(null);
   const [editText, setEditText] = useState("");
+  // פריטים שסומנו למחיקה אופטימית ל-Undo — עדיין קיימים בפועל במסמך
+  // ההגדרות עד שחלון ה-5 שניות פג (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const list = fullList.filter((x) => !hiddenIds.has(x.id));
 
   function persist(next) {
     save({ items: next });
   }
   function add() {
     if (!draft.trim()) return;
-    persist([...list, { id: newId(docKey), name: draft.trim() }]);
+    persist([...fullList, { id: newId(docKey), name: draft.trim() }]);
     setDraft("");
   }
   function saveEdit() {
-    persist(list.map((x) => (x.id === editId ? { ...x, name: editText.trim() } : x)));
+    persist(fullList.map((x) => (x.id === editId ? { ...x, name: editText.trim() } : x)));
     setEditId(null);
   }
-  function remove(id) {
-    if (!confirm("למחוק את הפריט?")) return;
-    persist(list.filter((x) => x.id !== id));
+  async function remove(x) {
+    const ok = await confirmDialog({
+      title: "מחיקת פריט",
+      message: `למחוק את "${x.name}"?`,
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(x.id));
+    toast.showUndo({
+      message: `"${x.name}" נמחק`,
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(x.id);
+          return next;
+        }),
+      onExpire: () => persist(fullList.filter((item) => item.id !== x.id)),
+    });
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -77,7 +101,7 @@ export default function NameListEditor({
                 >
                   עריכה
                 </button>
-                <button className="btn btn--muted" onClick={() => remove(x.id)}>
+                <button className="btn btn--muted" onClick={() => remove(x)}>
                   מחיקה
                 </button>
               </div>

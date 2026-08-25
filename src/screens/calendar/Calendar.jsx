@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useRepo } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import {
   formatTime,
   formatDate,
@@ -18,6 +20,8 @@ export default function Calendar() {
   const { items: income } = useCollectionData("income");
   const apptRepo = useRepo("appointments");
   const eventRepo = useRepo("events");
+  const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [view, setView] = useState("month");
   const [cursor, setCursor] = useState(() => {
@@ -27,6 +31,8 @@ export default function Calendar() {
   const [selected, setSelected] = useState(new Date());
   const [filters, setFilters] = useState({ showPast: true, showEvents: true, treatment: "" });
   const [sortBy, setSortBy] = useState("date");
+  // אירועים שנמחקו אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenEventIds, setHiddenEventIds] = useState(() => new Set());
 
   // מיפוי מזהה-הכנסה → רשומת הכנסה, כדי לדעת אם תור שנסגר ("status: done")
   // באמת סומן כ"שולם" בפועל, ולא רק "בוצע" (אלו שני מושגים שונים — ראו ItemRow).
@@ -48,16 +54,18 @@ export default function Calendar() {
         subtitle: x.clientName || "",
         raw: x,
       }));
-    const e = events.map((x) => ({
-      id: x.id,
-      type: "event",
-      start: x.start,
-      title: x.title || "אירוע",
-      subtitle: "אירוע",
-      raw: x,
-    }));
+    const e = events
+      .filter((x) => !hiddenEventIds.has(x.id))
+      .map((x) => ({
+        id: x.id,
+        type: "event",
+        start: x.start,
+        title: x.title || "אירוע",
+        subtitle: "אירוע",
+        raw: x,
+      }));
     return [...a, ...e];
-  }, [appts, events]);
+  }, [appts, events, hiddenEventIds]);
 
   const treatments = useMemo(
     () => [...new Set(appts.map((a) => a.treatmentName).filter(Boolean))],
@@ -70,13 +78,35 @@ export default function Calendar() {
       .sort((x, y) => new Date(x.start) - new Date(y.start));
   }
 
-  function cancelAppt(it) {
-    if (!confirm("לבטל את התור?")) return;
+  async function cancelAppt(it) {
+    const ok = await confirmDialog({
+      title: "ביטול תור",
+      message: "לבטל את התור?",
+      confirmLabel: "ביטול תור",
+      danger: true,
+    });
+    if (!ok) return;
     apptRepo.update(it.id, { status: "cancelled" });
   }
-  function deleteEvent(it) {
-    if (!confirm("למחוק את האירוע?")) return;
-    eventRepo.remove(it.id);
+  async function deleteEvent(it) {
+    const ok = await confirmDialog({
+      title: "מחיקת אירוע",
+      message: "למחוק את האירוע?",
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenEventIds((prev) => new Set(prev).add(it.id));
+    toast.showUndo({
+      message: "האירוע נמחק",
+      onUndo: () =>
+        setHiddenEventIds((prev) => {
+          const next = new Set(prev);
+          next.delete(it.id);
+          return next;
+        }),
+      onExpire: () => eventRepo.remove(it.id),
+    });
   }
 
   const loading = la || le;

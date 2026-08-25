@@ -3,21 +3,29 @@ import { useNavigate } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import DateField from "../components/DateField";
 import { useCollectionData, useRepo, useSettingDoc } from "../data";
+import { useConfirm } from "../context/ConfirmDialogProvider";
+import { useToast } from "../context/ToastProvider";
 import { formatILS } from "../utils/money";
 
 const EMPTY = { treatments: [], name: "", sessions: "", price: "", expiryDate: "" };
 
 export default function Series() {
   const navigate = useNavigate();
-  const { items, loading } = useCollectionData("series");
+  const { items: allItems, loading } = useCollectionData("series");
   const repo = useRepo("series");
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const treatments = treatmentsDoc?.items ?? [];
+  const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState(EMPTY);
   const [editId, setEditId] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
+  // סדרות שנמחקו אופטימית ל-Undo (מוסתרות מה-UI, נמחקות בפועל רק לאחר 5
+  // שניות אם לא נלחץ "ביטול" — ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const items = allItems.filter((s) => !hiddenIds.has(s.id));
 
   function payload(d) {
     return {
@@ -38,7 +46,11 @@ export default function Series() {
     try {
       await repo.add(payload(draft));
     } catch (e) {
-      alert("Failed to save the series: " + (e?.message || e));
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת הסדרה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
       return;
     }
     setDraft(EMPTY);
@@ -59,15 +71,35 @@ export default function Series() {
     try {
       await repo.update(editId, payload(editDraft));
     } catch (e) {
-      alert("Failed to update the series: " + (e?.message || e));
+      await confirmDialog({
+        title: "שגיאה",
+        message: "עדכון הסדרה נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
       return;
     }
     setEditId(null);
     setEditDraft(null);
   }
-  async function remove(id) {
-    if (!confirm("למחוק את הסדרה? חבילות שכבר נרכשו לא ייפגעו.")) return;
-    await repo.remove(id);
+  async function remove(s) {
+    const ok = await confirmDialog({
+      title: "מחיקת סדרה",
+      message: `למחוק את הסדרה "${s.name}"? חבילות שכבר נרכשו לא ייפגעו.`,
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(s.id));
+    toast.showUndo({
+      message: `הסדרה "${s.name}" נמחקה`,
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(s.id);
+          return next;
+        }),
+      onExpire: () => repo.remove(s.id),
+    });
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -127,7 +159,7 @@ export default function Series() {
                   <button className="btn btn--ghost" onClick={() => startEdit(s)}>
                     עריכה
                   </button>
-                  <button className="btn btn--muted" onClick={() => remove(s.id)}>
+                  <button className="btn btn--muted" onClick={() => remove(s)}>
                     מחיקה
                   </button>
                 </div>

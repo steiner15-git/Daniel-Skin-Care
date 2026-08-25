@@ -1,6 +1,8 @@
 import { useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 
 function newId() {
   return `t-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -8,11 +10,16 @@ function newId() {
 
 export default function Treatments() {
   const { data, loading, save } = useSettingDoc("treatments");
-  const items = data?.items ?? [];
+  const fullItems = data?.items ?? [];
+  const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [draft, setDraft] = useState({ name: "", durationMin: "", price: "" });
   const [editId, setEditId] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
+  // טיפולים שסומנו למחיקה אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const items = fullItems.filter((t) => !hiddenIds.has(t.id));
 
   function persist(next) {
     save({ items: next });
@@ -21,7 +28,7 @@ export default function Treatments() {
   function addTreatment() {
     if (!draft.name.trim()) return;
     persist([
-      ...items,
+      ...fullItems,
       {
         id: newId(),
         name: draft.name.trim(),
@@ -38,7 +45,7 @@ export default function Treatments() {
   }
   function saveEdit() {
     persist(
-      items.map((t) =>
+      fullItems.map((t) =>
         t.id === editId
           ? {
               ...t,
@@ -52,9 +59,25 @@ export default function Treatments() {
     setEditId(null);
     setEditDraft(null);
   }
-  function remove(id) {
-    if (!confirm("למחוק את הטיפול?")) return;
-    persist(items.filter((t) => t.id !== id));
+  async function remove(t) {
+    const ok = await confirmDialog({
+      title: "מחיקת טיפול",
+      message: `למחוק את הטיפול "${t.name}"?`,
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(t.id));
+    toast.showUndo({
+      message: `הטיפול "${t.name}" נמחק`,
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(t.id);
+          return next;
+        }),
+      onExpire: () => persist(fullItems.filter((item) => item.id !== t.id)),
+    });
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -126,7 +149,7 @@ export default function Treatments() {
                 <button className="btn btn--ghost" onClick={() => startEdit(t)}>
                   עריכה
                 </button>
-                <button className="btn btn--muted" onClick={() => remove(t.id)}>
+                <button className="btn btn--muted" onClick={() => remove(t)}>
                   מחיקה
                 </button>
               </div>

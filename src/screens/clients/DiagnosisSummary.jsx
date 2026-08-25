@@ -43,7 +43,7 @@ label, text: displayValue(f, value[f.key]) }))
           {s.rows.map((r) => (
             <div key={r.label} className="diag-summary__row">
               <span className="muted">{r.label}</span>
-              <span>{r.text}</span>
+              <span className="sensitive">{r.text}</span>
             </div>
           ))}
         </div>

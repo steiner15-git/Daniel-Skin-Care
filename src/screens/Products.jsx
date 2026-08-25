@@ -2,19 +2,26 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import { useCollectionData, useRepo } from "../data";
+import { useConfirm } from "../context/ConfirmDialogProvider";
+import { useToast } from "../context/ToastProvider";
 import { formatILS } from "../utils/money";
 
 const EMPTY = { name: "", price: "", stock: "", lowStockThreshold: "" };
 
 export default function Products() {
   const navigate = useNavigate();
-  const { items, loading } = useCollectionData("products");
+  const { items: allItems, loading } = useCollectionData("products");
   const repo = useRepo("products");
+  const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState(EMPTY);
   const [editId, setEditId] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
+  // מוצרים שנמחקו אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const items = allItems.filter((p) => !hiddenIds.has(p.id));
 
   function payload(d) {
     return {
@@ -47,9 +54,25 @@ export default function Products() {
     setEditId(null);
     setEditDraft(null);
   }
-  async function remove(id) {
-    if (!confirm("למחוק את המוצר?")) return;
-    await repo.remove(id);
+  async function remove(p) {
+    const ok = await confirmDialog({
+      title: "מחיקת מוצר",
+      message: `למחוק את "${p.name}"?`,
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(p.id));
+    toast.showUndo({
+      message: `"${p.name}" נמחק`,
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(p.id);
+          return next;
+        }),
+      onExpire: () => repo.remove(p.id),
+    });
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -109,7 +132,7 @@ export default function Products() {
                   <button className="btn btn--ghost" onClick={() => startEdit(p)}>
                     עריכה
                   </button>
-                  <button className="btn btn--muted" onClick={() => remove(p.id)}>
+                  <button className="btn btn--muted" onClick={() => remove(p)}>
                     מחיקה
                   </button>
                 </div>

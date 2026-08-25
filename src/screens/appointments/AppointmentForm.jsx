@@ -9,6 +9,7 @@ import {
 } from "../../data";
 import { fullName } from "../clients/clientUtils";
 import { combine, overlaps, weekday, formatTime } from "../../utils/datetime";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
@@ -32,6 +33,7 @@ export default function AppointmentForm() {
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const { data: hoursDoc } = useSettingDoc("workingHours");
   const treatments = treatmentsDoc?.items ?? [];
+  const confirmDialog = useConfirm();
 
   const editing = isEdit ? appts.find((a) => a.id === id) : null;
   const locked = editing && (editing.status === "done" || editing.incomeId);
@@ -196,7 +198,11 @@ export default function AppointmentForm() {
         else apptId = await repo.add({ ...payload, inviteSent: false });
       } catch (e) {
         setSaving(false);
-        alert("Failed to save the appointment: " + (e?.message || e));
+        await confirmDialog({
+          title: "שגיאה",
+          message: "שמירת התור נכשלה: " + (e?.message || e),
+          alertOnly: true,
+        });
         return;
       }
 
