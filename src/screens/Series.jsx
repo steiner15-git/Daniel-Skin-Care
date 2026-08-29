@@ -1,8 +1,11 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import DateField from "../components/DateField";
+import PaymentBadge from "../components/PaymentBadge";
+import { SkeletonRows } from "../components/Skeleton";
 import { useCollectionData, useRepo, useSettingDoc } from "../data";
+import { useReminderSettings } from "../data/useReminderSettings";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { useToast } from "../context/ToastProvider";
 import { formatILS } from "../utils/money";
@@ -10,6 +13,51 @@ import { formatILS } from "../utils/money";
 const EMPTY = { treatments: [], name: "", sessions: "", price: "", expiryDate: "" };
 
 export default function Series() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // תמיכה בקפיצה ישירה לטאב "רכישות" עם פילטר "עומדת לפוג" מופעל מראש —
+  // מהתזכורת "חבילות עומדות לפוג" בדשבורד (addendum #12).
+  const initialTab = searchParams.get("tab") === "purchases" ? "purchases" : "definitions";
+  const initialExpiringOnly = searchParams.get("filter") === "expiring";
+  const [tab, setTab] = useState(initialTab);
+
+  return (
+    <>
+      <ScreenHeader
+        title="סדרות טיפול"
+        action={
+          <button className="btn btn--ghost" onClick={() => navigate("/")}>
+            למסך הבית
+          </button>
+        }
+      />
+
+      <div className="seg" style={{ marginBottom: 16 }}>
+        <button
+          className={"seg__btn" + (tab === "definitions" ? " on" : "")}
+          onClick={() => setTab("definitions")}
+        >
+          הגדרת סדרות
+        </button>
+        <button
+          className={"seg__btn" + (tab === "purchases" ? " on" : "")}
+          onClick={() => setTab("purchases")}
+        >
+          רכישות
+        </button>
+      </div>
+
+      {tab === "definitions" ? (
+        <DefinitionsTab />
+      ) : (
+        <PurchasesTab initialExpiringOnly={initialExpiringOnly} />
+      )}
+    </>
+  );
+}
+
+/* ---------- הגדרת סדרות — ללא שינוי לוגי, רק הועבר לתת-רכיב ---------- */
+function DefinitionsTab() {
   const navigate = useNavigate();
   const { items: allItems, loading } = useCollectionData("series");
   const repo = useRepo("series");
@@ -26,6 +74,8 @@ export default function Series() {
   // שניות אם לא נלחץ "ביטול" — ראו ToastProvider).
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const items = allItems.filter((s) => !hiddenIds.has(s.id));
+
+  if (loading) return <SkeletonRows count={4} />;
 
   function payload(d) {
     return {
@@ -102,19 +152,8 @@ export default function Series() {
     });
   }
 
-  if (loading) return <p className="muted">טוען…</p>;
-
   return (
     <>
-      <ScreenHeader
-        title="סדרות טיפול"
-        action={
-          <button className="btn btn--ghost" onClick={() => navigate("/")}>
-            למסך הבית
-          </button>
-        }
-      />
-
       {treatments.length === 0 && (
         <div className="notice" style={{ marginTop: 0 }}>
           כדי להגדיר סדרה צריך קודם טיפולים ברשימת הטיפולים שבהגדרות.
@@ -315,5 +354,139 @@ function SeriesFields({ d, setD, treatments, onSave, onCancel, editing }) {
         </button>
       )}
     </div>
+  );
+}
+
+/* ---------- רכישות (addendum #13) — clientPackages עם סינון/מיון ---------- */
+
+// אותה לוגיקת סטטוס בדיוק כמו packageState ב-ClientCard.jsx (חבילה פעילה/
+// נוצלה/פקעה) — משוכפלת כאן במכוון (קובץ נפרד, פונקציה קטנה) במקום תלות
+// צולבת בין שני מסכי מסך-עצמאיים.
+function purchaseStatus(p) {
+  if (p.status !== "active" || (p.remainingSessions ?? 0) <= 0) return "used";
+  if (p.expiryDate && new Date(p.expiryDate) < new Date(new Date().toDateString())) return "expired";
+  return "active";
+}
+const STATUS_LABEL = { active: "פעילה", used: "נוצלה", expired: "פקעה" };
+
+function isExpiringSoon(p, thresholdDays) {
+  if (!p.expiryDate) return false;
+  const days = Math.ceil((new Date(p.expiryDate) - new Date(new Date().toDateString())) / 86400000);
+  return days >= 0 && days <= thresholdDays;
+}
+
+function PurchasesTab({ initialExpiringOnly = false }) {
+  const navigate = useNavigate();
+  const { items: packages, loading } = useCollectionData("clientPackages");
+  const { items: income } = useCollectionData("income");
+  const { data: reminders } = useReminderSettings();
+
+  const incomeById = useMemo(() => {
+    const map = {};
+    for (const r of income) map[r.id] = r;
+    return map;
+  }, [income]);
+
+  const [q, setQ] = useState("");
+  // ברירת מחדל: פעילה + פקעה (לא כולל "נוצלה") — לפי דרישת ה-addendum.
+  const [statusFilter, setStatusFilter] = useState("activeExpired");
+  const [paymentFilter, setPaymentFilter] = useState(""); // "" | paid | unpaid
+  const [expiringOnly, setExpiringOnly] = useState(initialExpiringOnly);
+  const [sortBy, setSortBy] = useState("expiry"); // expiry | client
+
+  const list = useMemo(() => {
+    const term = q.trim();
+    let l = packages.slice();
+    if (term)
+      l = l.filter((p) =>
+        [p.clientName, p.seriesName].filter(Boolean).some((v) => String(v).includes(term))
+      );
+    if (statusFilter === "activeExpired") l = l.filter((p) => purchaseStatus(p) !== "used");
+    else if (statusFilter) l = l.filter((p) => purchaseStatus(p) === statusFilter);
+    if (paymentFilter) {
+      l = l.filter((p) => {
+        const inc = p.incomeId ? incomeById[p.incomeId] : null;
+        return paymentFilter === "paid" ? inc?.paid === true : !(inc?.paid === true);
+      });
+    }
+    if (expiringOnly) l = l.filter((p) => isExpiringSoon(p, reminders.packageExpiryDays ?? 14));
+    l.sort((a, b) => {
+      if (sortBy === "client") return (a.clientName || "").localeCompare(b.clientName || "", "he");
+      // ברירת מחדל: תאריך פקיעה קרוב קודם; ללא תאריך פקיעה מוצג בסוף.
+      const ea = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
+      const eb = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity;
+      return ea - eb;
+    });
+    return l;
+  }, [packages, q, statusFilter, paymentFilter, expiringOnly, sortBy, incomeById, reminders.packageExpiryDays]);
+
+  if (loading) return <SkeletonRows count={4} />;
+
+  return (
+    <>
+      <div className="toolbar">
+        <input placeholder="חיפוש (לקוחה / סדרה)" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="toolbar__row">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="activeExpired">פעילה + פקעה</option>
+            <option value="">כל הסטטוסים</option>
+            <option value="active">פעילה</option>
+            <option value="expired">פקעה</option>
+            <option value="used">נוצלה</option>
+          </select>
+          <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)}>
+            <option value="">תשלום: הכל</option>
+            <option value="paid">שולם</option>
+            <option value="unpaid">לא שולם</option>
+          </select>
+        </div>
+        <div className="toolbar__row">
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="expiry">סדר לפי תאריך פקיעה</option>
+            <option value="client">סדר לפי לקוחה</option>
+          </select>
+          <label className="inline-check" style={{ flex: "1 1 180px" }}>
+            <input
+              type="checkbox"
+              checked={expiringOnly}
+              onChange={(e) => setExpiringOnly(e.target.checked)}
+            />
+            <span>עומדת לפוג (עד {reminders.packageExpiryDays ?? 14} ימים)</span>
+          </label>
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="empty-state">אין רכישות התואמות לסינון.</div>
+      ) : (
+        <div className="list">
+          {list.map((p) => {
+            const inc = p.incomeId ? incomeById[p.incomeId] : null;
+            return (
+              <button
+                key={p.id}
+                className="card list-item as-button"
+                onClick={() =>
+                  navigate(`/clients/${p.clientId}`, { state: { tab: "appointments" } })
+                }
+              >
+                <div className="list-item__main">
+                  <strong>
+                    {p.clientName || "—"}{" "}
+                    <span className="badge badge--info">{STATUS_LABEL[purchaseStatus(p)]}</span>{" "}
+                    <PaymentBadge income={inc} />
+                  </strong>
+                  <span className="muted">
+                    {p.seriesName} · נותרו {p.remainingSessions}/{p.totalSessions}
+                    {p.expiryDate ? ` · בתוקף עד ${p.expiryDate}` : ""}
+                  </span>
+                </div>
+                <span className="nav-card__chev">‹</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

@@ -146,6 +146,7 @@ textarea:focus {
   box-shadow: 0 -1px 10px rgba(42, 37, 33, 0.05);
 }
 .bottom-nav__item {
+  position: relative; /* עוגן למיקום ה-badge המספרי (addendum #10) */
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -170,6 +171,24 @@ textarea:focus {
 }
 .bottom-nav__item.active {
   color: var(--accent);
+}
+
+/* באדג' מספרי בפינת אייקון בבר הניווט (addendum #10) — תורים "ממתינים
+   לסגירה" על היומן, הכנסות "לא-מאומתות" על ניהול עסק. מספר מלא, לא "9+". */
+.nav-badge {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 22%;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
 }
 
 /* ---- רכיבים משותפים ---- */
@@ -858,6 +877,19 @@ textarea {
   background: rgba(168, 124, 63, 0.12);
   color: var(--accent);
 }
+.badge--pending {
+  /* "ממתין לסגירה" (addendum #5) — כתום, מובחן מ"לא שולם" (badge--warn,
+     אדמדם) ומ"מחבילה"/סטטוס חבילה (badge--info, זהב). */
+  background: rgba(201, 130, 40, 0.14);
+  color: #a15a1f;
+}
+.badge--btn {
+  /* איפוס עיצוב <button> ילידי כדי שתגית לחיצה (badge--warn/badge--pending
+     כפתור) תיראה זהה לתגית תצוגתית רגילה, רק עם cursor:pointer. */
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
 
 .list-item--pending {
   border-inline-start: 3px solid var(--accent);
@@ -1438,5 +1470,151 @@ body.clinic-mode .sensitive.revealed {
   font-weight: 600;
   font-size: 14px;
   flex-shrink: 0;
+  padding: 4px;
+}
+
+/* ---- שגיאת העלאת תמונה ל-Drive (addendum #1+#2) ----
+   הודעת כשל + כפתור פעולה מותאם לסיבה ("התחברות מחדש" / "נסי שוב"),
+   מוצג מתחת לכפתור ההעלאה בכל שלושת מקומות ההעלאה (אלבום לקוחה, אלבום
+   כללי, חשבונית הכנסה/הוצאה). ראו src/data/useDriveUpload.js. */
+.upload-error {
+  margin-top: 8px;
+}
+.upload-error__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ---- טאבי "סיכום" מורחבים: לפי מוצר / לפי לקוחה (addendum #3+4) ---- */
+
+/* שורה מודגשת ברשימה המדורגת כשנבחרה (מבליטה את המקטע התואם בגרף) */
+.ranked-row--on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(168, 124, 63, 0.15);
+}
+
+/* גרף עמודות מוערם עם N מקטעים (StackedBarChart.jsx) — נפרד מ-.barchart
+   הקיים (BarChart.jsx, טאב "כללי" בלבד, שני טורים קבועים) כדי לא לגעת בו. */
+.stackchart {
+  margin-top: 4px;
+}
+.stackchart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.stackchart__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.stackchart__legend-item.sm {
+  font-size: 10px;
+}
+.stackchart__legend-item .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.stackchart__plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 170px;
+}
+.stackchart__col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.stackchart__bar {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  align-items: stretch;
+  border-radius: 2px 2px 0 0;
+  position: relative;
+}
+.stackchart__seg {
+  width: 100%;
+  min-height: 2px;
+  position: relative;
+  transition: opacity 150ms ease;
+}
+.stackchart__seg.dimmed {
+  opacity: 0.22;
+}
+.stackchart__seg-label {
+  position: absolute;
+  top: -16px;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  background: var(--surface);
+  padding: 1px 4px;
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  z-index: 1;
+}
+.stackchart__col-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ---- Skeleton loading (addendum #8) ----
+   בגוון --accent-soft בשקיפות נמוכה (לא אפור נייטרלי) — עקבי עם פלטת
+   האפליקציה. מוצג רק במסכי רשימה/רשת עם מבנה קבוע, ראו Skeleton.jsx.
+   שים לב לסדר: מוצהר אחרי .album-thumb כדי שהרקע שלו יגבר על רקע
+   .album-thumb הרגיל כשהם משולבים יחד (className="album-thumb skeleton"). */
+.skeleton {
+  background: rgba(201, 169, 120, 0.28);
+  border-radius: 6px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-pulse {
+  0%, 100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.skeleton--title {
+  width: 55%;
+  height: 15px;
+  margin-bottom: 8px;
+}
+.skeleton--subtitle {
+  width: 35%;
+  height: 12px;
+}
+
+/* ---- חיפוש גלובלי (addendum #11) ---- */
+.search-modal {
+  max-width: 520px;
+}
+.search-show-more {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: center;
+  margin-top: 8px;
   padding: 4px;
 }

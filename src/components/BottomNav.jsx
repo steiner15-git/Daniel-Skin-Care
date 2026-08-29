@@ -1,4 +1,7 @@
 import { NavLink } from "react-router-dom";
+import { useCollectionData } from "../data";
+import { useReminderSettings } from "../data/useReminderSettings";
+import { pendingClosureAppts, unverifiedIncome } from "../utils/reminders";
 
 const ICONS = {
   home: (
@@ -42,31 +45,49 @@ const ICONS = {
   ),
 };
 
-// 5 מסכים תדירים בבר; הגדרות וסדרות-ומוצרים נגישים ממסך הבית
+// 5 מסכים תדירים בבר; הגדרות וסדרות-ומוצרים נגישים ממסך הבית.
+// badgeKey מציין אילו פריטים מקבלים באדג' מספרי (addendum #10):
+//   calendar → תורים "ממתינים לסגירה" (אותה לוגיקה כמו מסך הבית)
+//   business → הכנסות "לא-מאומתות" שעברו את סף ימי אימות התשלום
 const ITEMS = [
   { to: "/", label: "בית", icon: "home", end: true },
   { to: "/appointments", label: "תיאום תור", icon: "book" },
-  { to: "/calendar", label: "יומן", icon: "calendar" },
+  { to: "/calendar", label: "יומן", icon: "calendar", badgeKey: "pending" },
   { to: "/clients", label: "לקוחות", icon: "users" },
-  { to: "/business", label: "ניהול עסק", icon: "chart" },
+  { to: "/business", label: "ניהול עסק", icon: "chart", badgeKey: "unpaid" },
 ];
 
 export default function BottomNav() {
+  const { items: appts } = useCollectionData("appointments");
+  const { items: income } = useCollectionData("income");
+  const { data: reminders } = useReminderSettings();
+
+  const pendingCount = reminders.showPendingBadge ? pendingClosureAppts(appts).length : 0;
+  const unpaidCount = reminders.showUnpaidBadge
+    ? unverifiedIncome(income, reminders.paymentVerificationDays).length
+    : 0;
+
+  const counts = { pending: pendingCount, unpaid: unpaidCount };
+
   return (
     <nav className="bottom-nav">
-      {ITEMS.map((it) => (
-        <NavLink
-          key={it.to}
-          to={it.to}
-          end={it.end}
-          className={({ isActive }) =>
-            "bottom-nav__item" + (isActive ? " active" : "")
-          }
-        >
-          {ICONS[it.icon]}
-          <span>{it.label}</span>
-        </NavLink>
-      ))}
+      {ITEMS.map((it) => {
+        const count = it.badgeKey ? counts[it.badgeKey] : 0;
+        return (
+          <NavLink
+            key={it.to}
+            to={it.to}
+            end={it.end}
+            className={({ isActive }) =>
+              "bottom-nav__item" + (isActive ? " active" : "")
+            }
+          >
+            {ICONS[it.icon]}
+            {count > 0 && <span className="nav-badge">{count}</span>}
+            <span>{it.label}</span>
+          </NavLink>
+        );
+      })}
     </nav>
   );
 }

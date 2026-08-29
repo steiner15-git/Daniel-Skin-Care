@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { IS_LOCAL } from "../data";
-import { storeImage, deletePhoto } from "../data/photos";
+import { deletePhoto } from "../data/photos";
+import { useDriveUpload } from "../data/useDriveUpload";
 import { useImageSrc } from "../data/useImageSrc";
 import ImageModal from "./ImageModal";
 
@@ -18,33 +19,29 @@ function ReceiptModal({ value, onClose }) {
 export default function ReceiptField({ value, onChange, folderName = "Invoices" }) {
   const { ensureDriveToken } = useAuth();
   const fileRef = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [viewing, setViewing] = useState(false);
+  const driveUpload = useDriveUpload();
 
   async function onPick(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    setBusy(true);
-    setError("");
     try {
-      const stored = await storeImage(file, { folders: [folderName], ensureDriveToken });
+      const stored = await driveUpload.upload(file, [folderName]);
       onChange({
         receiptData: stored.localData || null,
         receiptFileId: stored.driveFileId || null,
         receiptMime: stored.mimeType || null,
       });
     } catch {
-      setError("צירוף התמונה נכשל. נסי שוב (בענן ייתכן שתידרש התחברות מחדש ל-Google).");
-    } finally {
-      setBusy(false);
+      /* הכשל מטופל ע"י driveUpload — הודעה + כפתור פעולה מוצגים למטה */
     }
   }
 
   async function removeReceipt() {
     const fileId = value?.receiptFileId;
     onChange({ receiptData: null, receiptFileId: null, receiptMime: null });
+    driveUpload.reset();
     if (!IS_LOCAL && fileId) {
       try {
         const token = await ensureDriveToken();
@@ -73,10 +70,10 @@ export default function ReceiptField({ value, onChange, folderName = "Invoices" 
       ) : (
         <button
           className="btn btn--ghost"
-          disabled={busy}
+          disabled={driveUpload.busy}
           onClick={() => fileRef.current?.click()}
         >
-          {busy ? "מצרפת…" : "צירוף תמונה"}
+          {driveUpload.label || "צירוף תמונה"}
         </button>
       )}
       <input
@@ -87,7 +84,29 @@ export default function ReceiptField({ value, onChange, folderName = "Invoices" 
         hidden
         onChange={onPick}
       />
-      {error && <p className="warn-text">{error}</p>}
+      {driveUpload.phase === "error" && (
+        <div className="upload-error">
+          <p className="warn-text" style={{ marginTop: 8 }}>
+            {driveUpload.errorReason === "no-token"
+              ? "⚠ צירוף התמונה נכשל — נדרשת התחברות מחדש ל-Google."
+              : "⚠ צירוף התמונה נכשל. בדקי את החיבור לרשת ונסי שוב."}
+          </p>
+          <div className="upload-error__actions">
+            {driveUpload.errorReason === "no-token" ? (
+              <button className="btn btn--sm" onClick={() => driveUpload.reconnect()}>
+                התחברות מחדש
+              </button>
+            ) : (
+              <button className="btn btn--sm" onClick={() => driveUpload.retry()}>
+                נסי שוב
+              </button>
+            )}
+            <button className="btn btn--muted btn--sm" onClick={() => driveUpload.reset()}>
+              ביטול
+            </button>
+          </div>
+        </div>
+      )}
       {viewing && <ReceiptModal value={value} onClose={() => setViewing(false)} />}
     </div>
   );

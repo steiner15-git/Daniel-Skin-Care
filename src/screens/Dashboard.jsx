@@ -1,9 +1,16 @@
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
+import { SkeletonRows } from "../components/Skeleton";
 import { useCollectionData, useSettingDoc } from "../data";
+import { useReminderSettings } from "../data/useReminderSettings";
+import {
+  pendingClosureAppts,
+  unverifiedIncome,
+  inactiveClients,
+  expiringPackages,
+} from "../utils/reminders";
 import { formatTime, formatDate, sameDay } from "../utils/datetime";
-import { formatILS } from "../utils/money";
 import { fullName, ageFromBirthday } from "./clients/clientUtils";
 
 const CAP = 3;
@@ -33,13 +40,13 @@ function daysUntilBirthday(birthday) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { items: appts } = useCollectionData("appointments");
-  const { items: events } = useCollectionData("events");
+  const { items: appts, loading: loadingAppts } = useCollectionData("appointments");
+  const { items: events, loading: loadingEvents } = useCollectionData("events");
   const { items: income } = useCollectionData("income");
   const { items: clients } = useCollectionData("clients");
-  const { data: verifDoc } = useSettingDoc("paymentVerification");
+  const { items: packages } = useCollectionData("clientPackages");
+  const { data: reminders } = useReminderSettings();
   const { data: business } = useSettingDoc("business");
-  const verifDays = verifDoc?.days ?? 7;
 
   const now = Date.now();
   const today = new Date();
@@ -63,11 +70,9 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appts, events, now]);
 
+  // "ממתינים לסגירה" — לוגיקה משותפת עם הבאדג' על אייקון היומן (BottomNav).
   const pending = useMemo(
-    () =>
-      appts
-        .filter((x) => x.status !== "cancelled" && x.status !== "done" && new Date(x.start).getTime() < now)
-        .sort((x, y) => new Date(x.start) - new Date(y.start)),
+    () => pendingClosureAppts(appts, now).sort((x, y) => new Date(x.start) - new Date(y.start)),
     [appts, now]
   );
 
@@ -81,14 +86,22 @@ export default function Dashboard() {
     [clients]
   );
 
+  // הכנסות "לא-מאומתות" — לוגיקה משותפת עם הבאדג' על אייקון ניהול העסק (BottomNav).
   const unpaid = useMemo(
-    () =>
-      income.filter((r) => {
-        if (r.paid) return false;
-        const age = (now - new Date(r.date).getTime()) / 86400000;
-        return age >= verifDays;
-      }),
-    [income, now, verifDays]
+    () => unverifiedIncome(income, reminders.paymentVerificationDays, now),
+    [income, now, reminders.paymentVerificationDays]
+  );
+
+  // לקוחות שלא ביקרו מעל X חודשים (סעיף 9 בתוספת ה-PRD).
+  const inactive = useMemo(
+    () => inactiveClients(clients, appts, reminders.inactiveClientMonths),
+    [clients, appts, reminders.inactiveClientMonths]
+  );
+
+  // חבילות שעומדות לפוג בקרוב (סעיף 12 בתוספת ה-PRD).
+  const expiring = useMemo(
+    () => expiringPackages(packages, reminders.packageExpiryDays),
+    [packages, reminders.packageExpiryDays]
   );
 
   return (
@@ -97,7 +110,9 @@ export default function Dashboard() {
 
       {/* לו"ז היום */}
       <h3 className="group-title">לו״ז היום · {formatDate(today.toISOString())}</h3>
-      {todayItems.length === 0 ? (
+      {loadingAppts || loadingEvents ? (
+        <SkeletonRows count={2} lines={1} />
+      ) : todayItems.length === 0 ? (
         <div className="empty-state" style={{ padding: 16 }}>אין תורים או אירועים היום.</div>
       ) : (
         <div className="list">
@@ -145,7 +160,7 @@ export default function Dashboard() {
       )}
 
       {/* תזכורות */}
-      {(birthdays.length > 0 || unpaid.length > 0) && (
+      {(birthdays.length > 0 || unpaid.length > 0 || inactive.length > 0 || expiring.length > 0) && (
         <>
           <h3 className="group-title">תזכורות</h3>
           <div className="card reminders">
@@ -160,7 +175,23 @@ export default function Dashboard() {
                 className="reminder reminder--link"
                 onClick={() => navigate("/business?tab=income&filter=unpaid")}
               >
-                💰 {unpaid.length} תשלומים טרם אומתו (מעל {verifDays} ימים) →
+                💰 {unpaid.length} תשלומים טרם אומתו (מעל {reminders.paymentVerificationDays} ימים) →
+              </button>
+            )}
+            {inactive.length > 0 && (
+              <button
+                className="reminder reminder--link"
+                onClick={() => navigate("/clients?filter=inactive")}
+              >
+                🔕 {inactive.length} לקוחות לא ביקרו מעל {reminders.inactiveClientMonths} חודשים →
+              </button>
+            )}
+            {expiring.length > 0 && (
+              <button
+                className="reminder reminder--link"
+                onClick={() => navigate("/series?tab=purchases&filter=expiring")}
+              >
+                📦 {expiring.length} חבילות עומדות לפוג בקרוב →
               </button>
             )}
           </div>

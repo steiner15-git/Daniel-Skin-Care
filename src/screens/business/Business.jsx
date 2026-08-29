@@ -2,6 +2,9 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import BarChart from "../../components/BarChart";
+import { SkeletonRows } from "../../components/Skeleton";
+import SummaryByProduct from "./SummaryByProduct";
+import SummaryByClient from "./SummaryByClient";
 import { useCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
 import { formatILS, HEB_MONTHS } from "../../utils/money";
 import { formatDate } from "../../utils/datetime";
@@ -17,8 +20,8 @@ const CURRENT_MONTH = new Date().getMonth();
 export default function Business() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") || "summary");
-  const { items: income } = useCollectionData("income");
-  const { items: expenses } = useCollectionData("expenses");
+  const { items: income, loading: incomeLoading } = useCollectionData("income");
+  const { items: expenses, loading: expensesLoading } = useCollectionData("expenses");
 
   return (
     <>
@@ -35,14 +38,40 @@ export default function Business() {
         </button>
       </div>
 
-      {tab === "summary" && <Summary income={income} expenses={expenses} />}
+      {tab === "summary" && <SummaryTabs income={income} expenses={expenses} />}
       {tab === "income" && (
         <IncomeTab
           income={income}
+          loading={incomeLoading}
           initialMissing={params.get("filter") === "unpaid" ? "confirmation" : ""}
         />
       )}
-      {tab === "expense" && <ExpenseTab expenses={expenses} />}
+      {tab === "expense" && <ExpenseTab expenses={expenses} loading={expensesLoading} />}
+    </>
+  );
+}
+
+// תתי-טאבים של "סיכום" (addendum §3+4): כללי | לפי מוצר | לפי לקוחה.
+// "כללי" (Summary למטה) נשאר בדיוק כפי שהיה — כולל התנהגות מצב קליניקה
+// שכבר עברה שינוי עצמאי — ללא כל שינוי בגוף הפונקציה עצמה.
+function SummaryTabs({ income, expenses }) {
+  const [sub, setSub] = useState("general");
+  return (
+    <>
+      <div className="seg" style={{ marginBottom: 16 }}>
+        <button className={"seg__btn" + (sub === "general" ? " on" : "")} onClick={() => setSub("general")}>
+          כללי
+        </button>
+        <button className={"seg__btn" + (sub === "product" ? " on" : "")} onClick={() => setSub("product")}>
+          לפי מוצר
+        </button>
+        <button className={"seg__btn" + (sub === "client" ? " on" : "")} onClick={() => setSub("client")}>
+          לפי לקוחה
+        </button>
+      </div>
+      {sub === "general" && <Summary income={income} expenses={expenses} />}
+      {sub === "product" && <SummaryByProduct />}
+      {sub === "client" && <SummaryByClient />}
     </>
   );
 }
@@ -149,7 +178,7 @@ function Summary({ income, expenses }) {
 }
 
 /* ---------- הכנסות ---------- */
-function IncomeTab({ income, initialMissing = "" }) {
+function IncomeTab({ income, initialMissing = "", loading }) {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
@@ -360,7 +389,9 @@ function IncomeTab({ income, initialMissing = "" }) {
         </button>
       </div>
 
-      {list.length === 0 ? (
+      {loading ? (
+        <SkeletonRows count={5} itemClassName="fin-item" />
+      ) : list.length === 0 ? (
         <div className="empty-state">
           {clinicMode && !q.trim()
             ? "מצב קליניקה פעיל — חפשי כדי להציג הכנסות."
@@ -415,7 +446,7 @@ function IncomeTab({ income, initialMissing = "" }) {
 }
 
 /* ---------- הוצאות ---------- */
-function ExpenseTab({ expenses }) {
+function ExpenseTab({ expenses, loading }) {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("expenses");
@@ -524,7 +555,9 @@ function ExpenseTab({ expenses }) {
         </button>
       </div>
 
-      {list.length === 0 ? (
+      {loading ? (
+        <SkeletonRows count={5} itemClassName="fin-item" />
+      ) : list.length === 0 ? (
         <div className="empty-state">
           {clinicMode && !q.trim()
             ? "מצב קליניקה פעיל — חפשי כדי להציג הוצאות."
