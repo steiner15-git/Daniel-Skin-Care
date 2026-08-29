@@ -65,6 +65,10 @@ export default function ProductSell() {
       source: "product",
       productId: p.id,
       quantity: qtyNum,
+      // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
+      // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
+      // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
+      clientId: clientId || null,
       clientName,
       treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
       note: "מכירת מוצר",

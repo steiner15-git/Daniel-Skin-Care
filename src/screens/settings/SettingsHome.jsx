@@ -6,10 +6,11 @@ const SECTIONS = [
   { to: "/settings/business", title: "פרטי עסק", desc: "שם, אימייל, כתובת, טלפון, לוגו" },
   { to: "/settings/treatments", title: "רשימת טיפולים", desc: "שם, משך ומחיר לכל טיפול" },
   { to: "/settings/invitation", title: "תוכן זימון", desc: "תבנית מייל הזימון ללקוחה" },
-  { to: "/settings/payment-verification", title: "אימות תשלום", desc: "ימים עד תזכורת תשלום" },
+  { to: "/settings/reminders", title: "תזכורות", desc: "אימות תשלום, לקוחות לא פעילות ובאדג'ים בניווט" },
   { to: "/settings/expense-categories", title: "קטגוריות הוצאה", desc: "רשימת קטגוריות להוצאות" },
   { to: "/settings/payment-methods", title: "אמצעי תשלום", desc: "מזומן, אשראי, ביט ועוד" },
   { to: "/settings/hours", title: "שעות פעילות", desc: "ימי עבודה ושעות (התראה בלבד)" },
+  { to: "/settings/backup", title: "גיבוי", desc: "סטטוס גיבוי אוטומטי ל-Drive, גיבוי ידני" },
   { to: "/settings/audit", title: "לוג שינויים", desc: "תיעוד פעולות רגישות על נתונים" },
 ];
 

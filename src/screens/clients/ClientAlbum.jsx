@@ -1,10 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import { useCollectionData, useRepo, useSettingDoc, IS_LOCAL } from "../../data";
 import { useAuth } from "../../auth/AuthProvider";
-import { storeImage, deletePhoto } from "../../data/photos";
+import { deletePhoto } from "../../data/photos";
+import { useDriveUpload } from "../../data/useDriveUpload";
 import { useImageSrc } from "../../data/useImageSrc";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
+import { SkeletonAlbumGrid } from "../../components/Skeleton";
 import PhotoDetailModal from "../../components/PhotoDetailModal";
 
 function todayInput() {
@@ -23,8 +25,7 @@ export default function ClientAlbum({ clientId, clientName }) {
   const confirmDialog = useConfirm();
   const toast = useToast();
   const fileRef = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const driveUpload = useDriveUpload();
   const [openId, setOpenId] = useState(null);
   // תמונות שנמחקו אופטימית ל-Undo (מוסתרות מה-UI, נמחקות בפועל רק לאחר 5
   // שניות אם לא נלחץ "ביטול" — ראו ToastProvider).
@@ -44,13 +45,8 @@ export default function ClientAlbum({ clientId, clientName }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    setBusy(true);
-    setError("");
     try {
-      const stored = await storeImage(file, {
-        folders: ["Clinic_Photos", clientName],
-        ensureDriveToken,
-      });
+      const stored = await driveUpload.upload(file, ["Clinic_Photos", clientName]);
       await repo.add({
         clientId,
         date: todayInput(),
@@ -60,9 +56,7 @@ export default function ClientAlbum({ clientId, clientName }) {
         mimeType: stored.mimeType || "image/jpeg",
       });
     } catch {
-      setError("העלאת התמונה נכשלה. נסי שוב (בענן ייתכן שתידרש התחברות מחדש ל-Google).");
-    } finally {
-      setBusy(false);
+      /* הכשל מטופל ע"י driveUpload — הודעה + כפתור פעולה מוצגים למטה */
     }
   }
 
@@ -101,16 +95,38 @@ export default function ClientAlbum({ clientId, clientName }) {
   return (
     <>
       <div className="save-row" style={{ marginTop: 0 }}>
-        <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
-          {busy ? "מעלה…" : "הוספת תמונה"}
+        <button className="btn" disabled={driveUpload.busy} onClick={() => fileRef.current?.click()}>
+          {driveUpload.label || "הוספת תמונה"}
         </button>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPick} />
       </div>
 
-      {error && <p className="warn-text">{error}</p>}
+      {driveUpload.phase === "error" && (
+        <div className="upload-error">
+          <p className="warn-text">
+            {driveUpload.errorReason === "no-token"
+              ? "⚠ העלאת התמונה נכשלה — נדרשת התחברות מחדש ל-Google."
+              : "⚠ העלאת התמונה נכשלה. בדקי את החיבור לרשת ונסי שוב."}
+          </p>
+          <div className="upload-error__actions">
+            {driveUpload.errorReason === "no-token" ? (
+              <button className="btn btn--sm" onClick={() => driveUpload.reconnect()}>
+                התחברות מחדש
+              </button>
+            ) : (
+              <button className="btn btn--sm" onClick={() => driveUpload.retry()}>
+                נסי שוב
+              </button>
+            )}
+            <button className="btn btn--muted btn--sm" onClick={() => driveUpload.reset()}>
+              ביטול
+            </button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
-        <p className="muted">טוען…</p>
+        <SkeletonAlbumGrid count={6} />
       ) : mine.length === 0 ? (
         <div className="empty-state" style={{ padding: 16 }}>
           עדיין אין תמונות בלקוחה זו.

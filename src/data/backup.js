@@ -4,7 +4,9 @@ import { db } from "../firebase";
 const BACKUP_NAME = "daniel-skin-care-backup.xlsx";
 const XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const FILE_ID_KEY = "dsc:driveBackupFileId";
+// מיוצא (בעבר היה פרטי) כדי שמסך "הגדרות → גיבוי" (addendum #7) יוכל לבנות
+// קישור ישיר לקובץ הגיבוי ב-Drive מתוך אותו localStorage key בדיוק.
+export const FILE_ID_KEY = "dsc:driveBackupFileId";
 
 async function getAll(uid, name) {
   const snap = await getDocs(collection(db, "users", uid, name));

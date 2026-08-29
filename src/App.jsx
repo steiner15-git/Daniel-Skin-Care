@@ -34,10 +34,11 @@ import SettingsHome from "./screens/settings/SettingsHome";
 import BusinessDetails from "./screens/settings/BusinessDetails";
 import Treatments from "./screens/settings/Treatments";
 import Invitation from "./screens/settings/Invitation";
-import PaymentVerification from "./screens/settings/PaymentVerification";
+import Reminders from "./screens/settings/Reminders";
 import ExpenseCategories from "./screens/settings/ExpenseCategories";
 import PaymentMethods from "./screens/settings/PaymentMethods";
 import WorkingHours from "./screens/settings/WorkingHours";
+import Backup from "./screens/settings/Backup";
 
 function AutoBackup() {
   useAutoBackup();
@@ -100,16 +101,14 @@ path="series/:id/purchase" element={<SeriesPurchase />} />
               <Route path="settings/business" element={<BusinessDetails />} />
               <Route path="settings/treatments" element={<Treatments />} />
               <Route path="settings/invitation" element={<Invitation />} />
-              <Route
-                path="settings/payment-verification"
-                element={<PaymentVerification />}
-              />
+              <Route path="settings/reminders" element={<Reminders />} />
               <Route
                 path="settings/expense-categories"
                 element={<ExpenseCategories />}
               />
               <Route path="settings/payment-methods" element={<PaymentMethods />} />
               <Route path="settings/hours" element={<WorkingHours />} />
+              <Route path="settings/backup" element={<Backup />} />
               <Route path="settings/audit" element={<AuditLog />} />
             </Route>
           </Routes>

@@ -1,23 +1,28 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams, Link } from "react-router-dom";
+import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
+import PaymentBadge from "../../components/PaymentBadge";
 import ClientBasicFields from "./ClientBasicFields";
 import DiagnosisSummary from "./DiagnosisSummary";
 import ClientAlbum from "./ClientAlbum";
 import { useCollectionData, useRepo, useAuditLog } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
+import { formatDate } from "../../utils/datetime";
+import { formatILS } from "../../utils/money";
 import { fullName, ageFromBirthday, normalizePhone } from "./clientUtils";
 
 const TABS = [
   { key: "details", label: "פרטי לקוחה" },
   { key: "appointments", label: "רשימת תורים" },
+  { key: "products", label: "מוצרים" },
   { key: "album", label: "אלבום" },
 ];
 
 export default function ClientCard() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { items: clients, loading } = useCollectionData("clients");
   const { items: appts } = useCollectionData("appointments");
   const repo = useRepo("clients");
@@ -25,7 +30,9 @@ export default function ClientCard() {
   const confirmDialog = useConfirm();
 
   const client = clients.find((c) => c.id === id);
-  const [tab, setTab] = useState("details");
+  // תמיכה בקפיצה ישירה לטאב מסוים (למשל מטאב "רכישות"/"מכירות" ברשימות
+  // הסדרות/מוצרים, addendum #13/#14) — location.state.tab, ברירת מחדל "details".
+  const [tab, setTab] = useState(location.state?.tab || "details");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
 
@@ -113,6 +120,8 @@ export default function ClientCard() {
 
       {tab === "appointments" && <AppointmentsTab appts={appts} clientId={id} />}
 
+      {tab === "products" && <ProductsTab clientId={id} />}
+
       {tab === "album" && <ClientAlbum clientId={id} clientName={fullName(client)} />}
     </>
   );
@@ -194,6 +203,16 @@ function DetailsTab({
 
 function AppointmentsTab({ appts, clientId }) {
   const { items: packages } = useCollectionData("clientPackages");
+  const { items: income } = useCollectionData("income");
+
+  // מיפוי מזהה-הכנסה → רשומת הכנסה, כדי לדעת אם תור/רכישת סדרה באמת סומנו
+  // "שולם" בפועל (addendum #5) — אותו דפוס בדיוק כמו incomeById ב-Calendar.jsx.
+  const incomeById = useMemo(() => {
+    const map = {};
+    for (const r of income) map[r.id] = r;
+    return map;
+  }, [income]);
+
   // תור שבוטל ביומן נשאר ברשומות (לצורך היסטוריה/דוחות) אך מסומן status:
   // "cancelled" ואינו נמחק — לכן יש לסנן אותו כאן בדיוק כפי שהיומן (Calendar.jsx)
   // עושה, אחרת תור מבוטל "נדבק" לרשימת התורים של הלקוחה לנצח.
@@ -210,7 +229,7 @@ function AppointmentsTab({ appts, clientId }) {
 
   return (
     <>
-      <PackagesSection packages={myPackages} />
+      <PackagesSection packages={myPackages} incomeById={incomeById} />
 
       <h3 className="group-title">תורים עתידיים</h3>
       {future.length === 0 ? (
@@ -223,9 +242,45 @@ function AppointmentsTab({ appts, clientId }) {
       {past.length === 0 ? (
         <div className="empty-state" style={{ padding: "16px" }}>אין תורי עבר.</div>
       ) : (
-        <ApptList list={past} />
+        <ApptList list={past} incomeById={incomeById} showStatus />
       )}
     </>
+  );
+}
+
+// טאב "מוצרים" בכרטיסיית לקוחה (addendum #15). מקור: רשומות income עם
+// source:"product" ו-clientId תואם. שים לב: ProductSell.jsx עודכן כדי
+// לשמור clientId על ההכנסה (בעבר נשמר רק clientName) — בלעדיו לא ניתן היה
+// לשייך מכירות מוצר ללקוחה באופן אמין.
+function ProductsTab({ clientId }) {
+  const { items: income, loading } = useCollectionData("income");
+  const mine = income
+    .filter((r) => r.source === "product" && r.clientId === clientId)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (loading) return <p className="muted">טוען…</p>;
+  if (mine.length === 0)
+    return (
+      <div className="empty-state" style={{ padding: 16 }}>
+        עדיין לא נמכרו מוצרים ללקוחה זו.
+      </div>
+    );
+
+  return (
+    <div className="list">
+      {mine.map((r) => (
+        <div key={r.id} className="card list-item">
+          <div className="list-item__main">
+            <strong>
+              {r.treatmentName || "מוצר"} <PaymentBadge income={r} />
+            </strong>
+            <span className="muted">
+              {formatDate(r.date)} · {formatILS(r.amount)}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -235,7 +290,7 @@ function packageState(p) {
   return "פעילה";
 }
 
-function PackagesSection({ packages }) {
+function PackagesSection({ packages, incomeById }) {
   const repo = useRepo("clientPackages");
   const log = useAuditLog();
   const confirmDialog = useConfirm();
@@ -309,8 +364,9 @@ function PackagesSection({ packages }) {
 
   return (
     <div className="list" style={{ marginBottom: 8 }}>
-      {visiblePackages.map((p) =>
-        editId === p.id ? (
+      {visiblePackages.map((p) => {
+        const inc = p.incomeId ? incomeById[p.incomeId] : null;
+        return editId === p.id ? (
           <div key={p.id} className="card list-item--edit">
             <strong>{p.seriesName}</strong>
             <div className="row-2" style={{ marginTop: 8 }}>
@@ -350,7 +406,10 @@ function PackagesSection({ packages }) {
         ) : (
           <div key={p.id} className="card list-item">
             <div className="list-item__main">
-              <strong>{p.seriesName} <span className="badge badge--info">{packageState(p)}</span></strong>
+              <strong>
+                {p.seriesName} <span className="badge badge--info">{packageState(p)}</span>{" "}
+                <PaymentBadge income={inc} />
+              </strong>
               <span className="muted" style={{ fontSize: 13 }}>
                 נותרו {p.remainingSessions}/{p.totalSessions}
                 {p.expiryDate ? ` · בתוקף עד ${p.expiryDate}` : ""}
@@ -361,26 +420,57 @@ function PackagesSection({ packages }) {
               <button className="btn btn--muted" onClick={() => remove(p)}>מחיקה</button>
             </div>
           </div>
-        )
-      )}
+        );
+      })}
     </div>
   );
 }
 
-function ApptList({ list }) {
+// רשימת תורים בכרטיסיית לקוחה. showStatus=true (תורי עבר בלבד, addendum #5)
+// מוסיף תגית סטטוס/תשלום זהה ברוחה ל-ItemRow שב-Calendar.jsx: "מחבילה" לתור
+// שנסגר בפועל דרך חבילה, PaymentBadge לתור רגיל שנסגר, או "ממתין לסגירה"
+// (לחיץ → מסך אישור ביצוע) לתור שמועדו עבר וטרם נסגר. תורים עתידיים
+// (showStatus כברירת מחדל false) נשארים ללא שינוי — כולל תגית "מחבילה"
+// הישנה המבוססת על clientPackageId (כוונת חיוב, לא חיוב בפועל).
+function ApptList({ list, incomeById = {}, showStatus = false }) {
+  const navigate = useNavigate();
   return (
     <div className="list">
-      {list.map((a) => (
-        <div key={a.id} className="card list-item">
-          <div className="list-item__main">
-            <strong>
-              {a.treatmentName || "טיפול"}{" "}
-              {a.clientPackageId && <span className="badge badge--info">מחבילה</span>}
-            </strong>
-            <span className="muted">{new Date(a.start).toLocaleString("he-IL")}</span>
+      {list.map((a) => {
+        const isDone = a.status === "done";
+        const linkedIncome = a.incomeId ? incomeById[a.incomeId] : null;
+
+        return (
+          <div key={a.id} className="card list-item">
+            <div className="list-item__main">
+              <strong>
+                {a.treatmentName || "טיפול"}{" "}
+                {!showStatus && a.clientPackageId && (
+                  <span className="badge badge--info">מחבילה</span>
+                )}
+                {showStatus &&
+                  (a.chargedFromPackage ? (
+                    <span className="badge badge--info">מחבילה</span>
+                  ) : isDone ? (
+                    <PaymentBadge income={linkedIncome} />
+                  ) : (
+                    <button
+                      type="button"
+                      className="badge badge--pending badge--btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/appointments/${a.id}/close`, { state: { from: "clientCard" } });
+                      }}
+                    >
+                      ממתין לסגירה
+                    </button>
+                  ))}
+              </strong>
+              <span className="muted">{new Date(a.start).toLocaleString("he-IL")}</span>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

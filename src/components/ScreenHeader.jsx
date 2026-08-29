@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useClinicMode } from "../context/ClinicModeProvider";
+import GlobalSearch from "./GlobalSearch";
 
 // אייקון עין — פתוחה במצב רגיל, עם קו-חוצה כשמצב קליניקה פעיל (נורית חיווי)
 function EyeIcon({ off }) {
@@ -19,10 +21,22 @@ function EyeIcon({ off }) {
   );
 }
 
+// אייקון חיפוש — כפתור החיפוש הגלובלי (addendum #11)
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.3-4.3" />
+    </svg>
+  );
+}
+
 // כותרת מסך עם מפריד עלה-זהב (אלמנט חתימה — סעיף 5 ב-PRD)
-// + כפתור "מצב קליניקה" קבוע (טשטוש מידע רגיש מול לקוחה — ראו addendum §מצב קליניקה)
+// + כפתור "חיפוש גלובלי" (addendum #11) וכפתור "מצב קליניקה" קבועים
+// (טשטוש מידע רגיש מול לקוחה — ראו addendum §מצב קליניקה)
 export default function ScreenHeader({ title, action, logo }) {
   const { enabled, toggle } = useClinicMode();
+  const [searchOpen, setSearchOpen] = useState(false);
   return (
     <>
       <div className="screen-title">
@@ -31,6 +45,15 @@ export default function ScreenHeader({ title, action, logo }) {
           <h1>{title}</h1>
         </div>
         <div className="screen-title__actions">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="חיפוש"
+            title="חיפוש בכל האפליקציה"
+            onClick={() => setSearchOpen(true)}
+          >
+            <SearchIcon />
+          </button>
           <button
             type="button"
             className={"icon-btn clinic-toggle" + (enabled ? " clinic-toggle--on" : "")}
@@ -44,6 +67,7 @@ export default function ScreenHeader({ title, action, logo }) {
         </div>
       </div>
       <hr className="leaf-divider" />
+      {searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} />}
     </>
   );
 }

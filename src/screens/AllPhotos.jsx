@@ -1,9 +1,12 @@
 import { useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import PhotoDetailModal from "../components/PhotoDetailModal";
+import { SkeletonAlbumGrid } from "../components/Skeleton";
 import { useCollectionData, useRepo, useSettingDoc, IS_LOCAL } from "../data";
 import { useAuth } from "../auth/AuthProvider";
-import { storeImage, deletePhoto } from "../data/photos";
+import { deletePhoto } from "../data/photos";
+import { useDriveUpload } from "../data/useDriveUpload";
 import { useImageSrc } from "../data/useImageSrc";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { useToast } from "../context/ToastProvider";
@@ -17,6 +20,7 @@ function todayInput() {
 }
 
 export default function AllPhotos() {
+  const location = useLocation();
   const { items: photos, loading } = useCollectionData("photos");
   const { items: clients } = useCollectionData("clients");
   const { data: treatmentsDoc } = useSettingDoc("treatments");
@@ -27,11 +31,11 @@ export default function AllPhotos() {
   const [openId, setOpenId] = useState(null);
 
   const fileRef = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const driveUpload = useDriveUpload();
 
   const [q, setQ] = useState("");
-  const [clientFilter, setClientFilter] = useState("");
+  // תמיכה בהגעה מחיפוש גלובלי (addendum #11) עם לקוחה נבחרת מראש.
+  const [clientFilter, setClientFilter] = useState(location.state?.clientId || "");
   const [treatmentFilter, setTreatmentFilter] = useState("");
   const [sortDir, setSortDir] = useState("desc");
   // תמונות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
@@ -87,13 +91,8 @@ export default function AllPhotos() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    setBusy(true);
-    setError("");
     try {
-      const stored = await storeImage(file, {
-        folders: ["Clinic_Photos", "ללא שיוך"],
-        ensureDriveToken,
-      });
+      const stored = await driveUpload.upload(file, ["Clinic_Photos", "ללא שיוך"]);
       // תמונה חדשה נוצרת ללא שיוך; החלונית שנפתחת מיד מאפשרת למלא לקוחה/פרטים.
       const newId = await repo.add({
         clientId: "",
@@ -106,9 +105,7 @@ export default function AllPhotos() {
       });
       setOpenId(newId);
     } catch {
-      setError("העלאת התמונה נכשלה. נסי שוב (בענן ייתכן שתידרש התחברות מחדש ל-Google).");
-    } finally {
-      setBusy(false);
+      /* הכשל מטופל ע"י driveUpload — הודעה + כפתור פעולה מוצגים למטה */
     }
   }
 
@@ -151,14 +148,37 @@ export default function AllPhotos() {
       <div className="album-add">
         <button
           className="btn btn--ghost btn--sm"
-          disabled={busy}
+          disabled={driveUpload.busy}
           onClick={() => fileRef.current?.click()}
         >
-          {busy ? "מעלה…" : "+ הוספת תמונה"}
+          {driveUpload.label || "+ הוספת תמונה"}
         </button>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPick} />
       </div>
-      {error && <p className="warn-text">{error}</p>}
+
+      {driveUpload.phase === "error" && (
+        <div className="upload-error">
+          <p className="warn-text">
+            {driveUpload.errorReason === "no-token"
+              ? "⚠ העלאת התמונה נכשלה — נדרשת התחברות מחדש ל-Google."
+              : "⚠ העלאת התמונה נכשלה. בדקי את החיבור לרשת ונסי שוב."}
+          </p>
+          <div className="upload-error__actions">
+            {driveUpload.errorReason === "no-token" ? (
+              <button className="btn btn--sm" onClick={() => driveUpload.reconnect()}>
+                התחברות מחדש
+              </button>
+            ) : (
+              <button className="btn btn--sm" onClick={() => driveUpload.retry()}>
+                נסי שוב
+              </button>
+            )}
+            <button className="btn btn--muted btn--sm" onClick={() => driveUpload.reset()}>
+              ביטול
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="toolbar">
         <input
@@ -191,7 +211,7 @@ export default function AllPhotos() {
       </div>
 
       {loading ? (
-        <p className="muted">טוען…</p>
+        <SkeletonAlbumGrid count={8} />
       ) : view.length === 0 ? (
         <div className="empty-state">אין תמונות התואמות לסינון.</div>
       ) : (
