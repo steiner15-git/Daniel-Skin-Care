@@ -1,6 +1,6 @@
 import DateField from "../../components/DateField";
 
-const SOURCES = ["המלצה", "אינסטגרם", "פייסבוק", "גוגל", "לקוחה חוזרת", "אחר"];
+const SOURCES = ["המלצה", "אינסטגרם", "פייסבוק", "גוגל", "פרסום ממומן", "פלאייר", "לקוחה חוזרת", "רשת חברתית אחרת", "אחר"];
 
 // שדות פרטים בסיסיים (שלב 1). רכיב מבוקר — משמש בהוספה ובעריכה.
 export default function ClientBasicFields({ value, onChange, duplicatePhone }) {
