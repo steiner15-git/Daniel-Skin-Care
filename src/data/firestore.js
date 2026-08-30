@@ -10,6 +10,7 @@ import {
   getDocs,
   query,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../auth/AuthProvider";
@@ -182,6 +183,56 @@ export function useRepo(name) {
     async getAll() {
       const snap = await getDocs(collRef(user.uid, name));
       return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+  };
+}
+
+/* ---------- Batch repository: כתיבות אטומיות רב-קולקציה ---------- */
+// פותר את "רצפי כתיבה רב-שלביים לא-אטומיים" שזוהו באודיט QA (ראו
+// Daniel-skin-care_PRD-addendum-features.md — "אי-עקביות ידועות" +
+// דוח ה-Spec Compliance): רכישת סדרה (SeriesPurchase.jsx: יצירת income +
+// clientPackage) ומכירת מוצר (ProductSell.jsx: יצירת income + ניכוי stock)
+// היו שני קריאות repo נפרדות — אם הראשונה מצליחה והשנייה נכשלת (רשת/quota
+// באמצע), נוצרת רשומה יתומה (הכנסה בלי חבילה/ניכוי מלאי תואם).
+//
+// writeBatch של Firestore מבטיח שכל הפעולות בקבוצה מצליחות יחד או נכשלות
+// יחד (atomic) — אין מצב ביניים. שימוש:
+//   const batchRepo = useBatchRepo();
+//   const incomeId = batchRepo.newId("income");     // מזהה נוצר מראש, בלי כתיבה
+//   const packageId = batchRepo.newId("clientPackages");
+//   await batchRepo.commit([
+//     { name: "income", id: incomeId, type: "add", data: {...} },
+//     { name: "clientPackages", id: packageId, type: "add", data: {...} },
+//   ]);
+// "add" כאן כותב מסמך מלא לפי מזהה שכבר נוצר מראש (במקום addDoc עם מזהה
+// אוטומטי) — כי כל הפעולות בבאטש חייבות להיות ידועות-מזהה מראש לפני commit.
+// "update" מבצע patch על מסמך קיים, באותו אופן כמו useRepo().update.
+export function useBatchRepo() {
+  const { user } = useAuth();
+
+  return {
+    // יוצר מזהה מסמך חדש (ללא כתיבה בפועל) בקולקציה נתונה — לשימוש כ-id
+    // בפעולת "add" בתוך אותו batch, או כדי להפנות אליו ממסמך אחר באותו batch
+    // (למשל incomeId בתוך רשומת clientPackage).
+    newId(name) {
+      return doc(collRef(user.uid, name)).id;
+    },
+    async commit(ops) {
+      const batch = writeBatch(db);
+      for (const op of ops) {
+        const ref = itemRef(user.uid, op.name, op.id);
+        if (op.type === "update") {
+          batch.update(ref, { ...op.data, updatedAt: serverTimestamp() });
+        } else {
+          // "add" — מזהה כבר נוצר מראש דרך newId(), כותבים מסמך מלא.
+          batch.set(ref, {
+            ...op.data,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+      await batch.commit();
     },
   };
 }

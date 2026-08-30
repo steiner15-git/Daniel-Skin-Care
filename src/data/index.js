@@ -15,4 +15,5 @@ export const IS_LOCAL = LOCAL;
 export const useSettingDoc = impl.useSettingDoc;
 export const useCollectionData = impl.useCollectionData;
 export const useRepo = impl.useRepo;
+export const useBatchRepo = impl.useBatchRepo;
 export const useAuditLog = impl.useAuditLog;

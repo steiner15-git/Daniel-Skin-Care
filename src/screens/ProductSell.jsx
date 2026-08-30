@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
-import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../data";
+import { useCollectionData, useBatchRepo, useSettingDoc, useAuditLog } from "../data";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
@@ -15,8 +15,11 @@ export default function ProductSell() {
 
   const { items: products, loading } = useCollectionData("products");
   const { items: clients } = useCollectionData("clients");
-  const incomeRepo = useRepo("income");
-  const productRepo = useRepo("products");
+  // כתיבת ה-income ועדכון המלאי מבוצעים יחד באטומיות (writeBatch) דרך
+  // useBatchRepo — ראו הערת התיעוד ב-data/firestore.js. לפני כן היו אלה שתי
+  // קריאות repo נפרדות (incomeRepo.add + productRepo.update); כשל רשת בין
+  // השתיים היה יכול להשאיר רשומת הכנסה בלי ניכוי מלאי תואם.
+  const batchRepo = useBatchRepo();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const log = useAuditLog();
@@ -55,30 +58,44 @@ export default function ProductSell() {
   const outOfStock = stock <= 0;
   const qtyInvalid = qtyNum < 1 || qtyNum > stock;
 
-  // עוטפים ב-try/catch: אם יצירת ההכנסה או עדכון המלאי נכשלים (רשת/quota),
-  // המשתמשת מקבלת הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר
-  // תקוע עם כפתור disabled בלי משוב.
+  // עוטפים ב-try/catch: אם ה-batch כולו נכשל (רשת/quota), המשתמשת מקבלת
+  // הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר תקוע עם כפתור
+  // disabled בלי משוב. בזכות ה-batch, אין עוד מצב-ביניים אפשרי: או ששתי
+  // הפעולות (הכנסה + ניכוי מלאי) הצליחו יחד, או ששתיהן לא נכתבו כלל.
   async function confirmSale() {
     setSaving(true);
     try {
-      const incomeId = await incomeRepo.add({
-        source: "product",
-        productId: p.id,
-        quantity: qtyNum,
-        // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
-        // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
-        // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
-        clientId: clientId || null,
-        clientName,
-        treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
-        note: "מכירת מוצר",
-        amount: Number(amountVal) || 0,
-        date,
-        invoiceNumber: "",
-        paymentMethod,
-        paid,
-      });
-      await productRepo.update(p.id, { stock: Math.max(0, stock - qtyNum) });
+      const incomeId = batchRepo.newId("income");
+      await batchRepo.commit([
+        {
+          name: "income",
+          id: incomeId,
+          type: "add",
+          data: {
+            source: "product",
+            productId: p.id,
+            quantity: qtyNum,
+            // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
+            // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
+            // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
+            clientId: clientId || null,
+            clientName,
+            treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
+            note: "מכירת מוצר",
+            amount: Number(amountVal) || 0,
+            date,
+            invoiceNumber: "",
+            paymentMethod,
+            paid,
+          },
+        },
+        {
+          name: "products",
+          id: p.id,
+          type: "update",
+          data: { stock: Math.max(0, stock - qtyNum) },
+        },
+      ]);
       await log({
         action: "product_sale",
         entity: {
