@@ -95,6 +95,39 @@ export function useRepo(name) {
   };
 }
 
+// Batch repository — מקבילה מקומית ל-useBatchRepo של firestore.js (ראו שם
+// להסבר המלא על המוטיבציה: אטומיות בין income + clientPackage/stock).
+// localStorage אין לו טרנזקציות אמיתיות, אבל גם אין לו כשל-רשת-באמצע —
+// כל הפעולות כאן סינכרוניות ורצות בזיכרון JS יחיד, כך שמבחינה מעשית הן
+// כבר "אטומיות" (אין נקודת כשל חלקי אפשרית בין הפעולות). למרות זאת נשמר
+// אותו ה-API בדיוק (newId/commit) כדי ששני ה-backends יישארו אגנוסטיים
+// זה לזה עבור המסכים הקוראים (ProductSell.jsx, SeriesPurchase.jsx).
+export function useBatchRepo() {
+  return {
+    newId() {
+      return genId();
+    },
+    async commit(ops) {
+      // מקבצים לפי קולקציה כדי לבצע כתיבה אחת לכל קולקציה שנגעו בה (ולא
+      // כתיבה נפרדת ל-localStorage/emit לכל op) — סמנטית שקול ל-batch יחיד.
+      const byCollection = new Map();
+      for (const op of ops) {
+        if (!byCollection.has(op.name)) byCollection.set(op.name, readColl(op.name));
+        const arr = byCollection.get(op.name);
+        if (op.type === "update") {
+          const i = arr.findIndex((x) => x.id === op.id);
+          if (i >= 0) arr[i] = { ...arr[i], ...op.data, updatedAt: Date.now() };
+        } else {
+          arr.push({ id: op.id, ...op.data, createdAt: Date.now(), updatedAt: Date.now() });
+        }
+      }
+      for (const [name, arr] of byCollection.entries()) {
+        writeColl(name, arr);
+      }
+    },
+  };
+}
+
 export function useAuditLog() {
   return async function log({ action, entity, before, after }) {
     const arr = readColl("auditLog");

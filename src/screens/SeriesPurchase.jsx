@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
-import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../data";
+import { useCollectionData, useBatchRepo, useSettingDoc, useAuditLog } from "../data";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
@@ -15,8 +15,11 @@ export default function SeriesPurchase() {
 
   const { items: series, loading } = useCollectionData("series");
   const { items: clients } = useCollectionData("clients");
-  const incomeRepo = useRepo("income");
-  const packageRepo = useRepo("clientPackages");
+  // כתיבת ה-income ויצירת ה-clientPackage מבוצעות יחד באטומיות (writeBatch)
+  // דרך useBatchRepo — ראו הערת התיעוד ב-data/firestore.js. לפני כן היו אלה
+  // שתי קריאות repo נפרדות (incomeRepo.add + packageRepo.add); כשל רשת בין
+  // השתיים היה יכול להשאיר רשומת הכנסה בלי חבילת לקוחה תואמת (או להפך).
+  const batchRepo = useBatchRepo();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const log = useAuditLog();
@@ -50,36 +53,52 @@ export default function SeriesPurchase() {
 
   const amountVal = amount == null ? s.price ?? 0 : amount;
 
-  // עוטפים ב-try/catch: אם יצירת ההכנסה או החבילה נכשלת (רשת/quota), המשתמשת
-  // מקבלת הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר תקוע.
+  // עוטפים ב-try/catch: אם ה-batch כולו נכשל (רשת/quota), המשתמשת מקבלת
+  // הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר תקוע. בזכות
+  // ה-batch, אין עוד מצב-ביניים אפשרי: או ששתי הפעולות (הכנסה + חבילת
+  // לקוחה) הצליחו יחד, או ששתיהן לא נכתבו כלל.
   async function confirmPurchase() {
     setSaving(true);
     try {
-      const incomeId = await incomeRepo.add({
-        source: "series",
-        seriesId: s.id,
-        clientName,
-        treatmentName: s.name,
-        amount: Number(amountVal) || 0,
-        date,
-        invoiceNumber: "",
-        paymentMethod,
-        paid,
-      });
-      const packageId = await packageRepo.add({
-        clientId,
-        clientName,
-        seriesId: s.id,
-        seriesName: s.name,
-        treatmentIds: s.treatmentIds || (s.treatmentId ? [s.treatmentId] : []),
-        treatmentName: s.treatmentName,
-        totalSessions: Number(s.sessions) || 0,
-        remainingSessions: Number(s.sessions) || 0,
-        purchaseDate: date,
-        expiryDate: s.expiryDate || null,
-        incomeId,
-        status: "active",
-      });
+      const incomeId = batchRepo.newId("income");
+      const packageId = batchRepo.newId("clientPackages");
+      await batchRepo.commit([
+        {
+          name: "income",
+          id: incomeId,
+          type: "add",
+          data: {
+            source: "series",
+            seriesId: s.id,
+            clientName,
+            treatmentName: s.name,
+            amount: Number(amountVal) || 0,
+            date,
+            invoiceNumber: "",
+            paymentMethod,
+            paid,
+          },
+        },
+        {
+          name: "clientPackages",
+          id: packageId,
+          type: "add",
+          data: {
+            clientId,
+            clientName,
+            seriesId: s.id,
+            seriesName: s.name,
+            treatmentIds: s.treatmentIds || (s.treatmentId ? [s.treatmentId] : []),
+            treatmentName: s.treatmentName,
+            totalSessions: Number(s.sessions) || 0,
+            remainingSessions: Number(s.sessions) || 0,
+            purchaseDate: date,
+            expiryDate: s.expiryDate || null,
+            incomeId,
+            status: "active",
+          },
+        },
+      ]);
       await log({
         action: "series_purchase",
         entity: { type: "clientPackage", id: packageId, desc: `${clientName} — ${s.name}` },
