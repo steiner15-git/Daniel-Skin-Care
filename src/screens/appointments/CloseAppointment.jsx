@@ -2,16 +2,9 @@ import { useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
-import { formatDateTime } from "../../utils/datetime";
+import { formatDateTime, dateInputValue } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
 
 export default function CloseAppointment() {
   const { id } = useParams();
@@ -31,7 +24,7 @@ export default function CloseAppointment() {
   const appt = appts.find((a) => a.id === id);
   const [amount, setAmount] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [date, setDate] = useState(todayInput());
+  const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -55,48 +48,71 @@ export default function CloseAppointment() {
     (pkg.remainingSessions ?? 0) > 0 &&
     (!pkg.expiryDate || new Date(pkg.expiryDate) >= t0);
 
+  // עוטפים בכל פעולת אישור ב-try/catch: אם כתיבה ל-Firestore נכשלת (רשת,
+  // quota וכו') המשתמשת מקבלת הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום
+  // שהמסך יישאר תקוע עם כפתור disabled בלי שום משוב.
   async function confirmFromPackage() {
     setSaving(true);
     const remaining = (pkg.remainingSessions ?? 0) - 1;
-    await packageRepo.update(pkg.id, {
-      remainingSessions: remaining,
-      status: remaining <= 0 ? "used" : "active",
-    });
-    await apptRepo.update(appt.id, {
-      status: "done",
-      chargedFromPackage: true,
-      clientPackageId: pkg.id,
-    });
-    await log({
-      action: "package_charge",
-      entity: { type: "clientPackage", id: pkg.id, desc: `${appt.clientName} — ${pkg.seriesName}` },
-      before: { remainingSessions: pkg.remainingSessions },
-      after: { remainingSessions: remaining },
-    });
+    try {
+      await packageRepo.update(pkg.id, {
+        remainingSessions: remaining,
+        status: remaining <= 0 ? "used" : "active",
+      });
+      await apptRepo.update(appt.id, {
+        status: "done",
+        chargedFromPackage: true,
+        clientPackageId: pkg.id,
+      });
+      await log({
+        action: "package_charge",
+        entity: { type: "clientPackage", id: pkg.id, desc: `${appt.clientName} — ${pkg.seriesName}` },
+        before: { remainingSessions: pkg.remainingSessions },
+        after: { remainingSessions: remaining },
+      });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "אישור הביצוע נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
     navigate(backTo);
   }
 
   async function confirmDone() {
     setSaving(true);
-    const incomeId = await incomeRepo.add({
-      source: "appointment",
-      appointmentId: appt.id,
-      clientName: appt.clientName || "",
-      treatmentName: appt.treatmentName || "",
-      amount: Number(amountVal) || 0,
-      date,
-      invoiceNumber: "",
-      paymentMethod,
-      paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
-    });
-    await apptRepo.update(appt.id, {
-      status: "done",
-      incomeId,
-      paymentMethod,
-      // החבילה פקעה/נגמרה — התור חויב רגיל, מנתקים את הקישור לחבילה
-      clientPackageId: null,
-      chargedFromPackage: false,
-    });
+    try {
+      const incomeId = await incomeRepo.add({
+        source: "appointment",
+        appointmentId: appt.id,
+        clientName: appt.clientName || "",
+        treatmentName: appt.treatmentName || "",
+        amount: Number(amountVal) || 0,
+        date,
+        invoiceNumber: "",
+        paymentMethod,
+        paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
+      });
+      await apptRepo.update(appt.id, {
+        status: "done",
+        incomeId,
+        paymentMethod,
+        // החבילה פקעה/נגמרה — התור חויב רגיל, מנתקים את הקישור לחבילה
+        clientPackageId: null,
+        chargedFromPackage: false,
+      });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "אישור הביצוע נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
     navigate(backTo);
   }
 
@@ -108,7 +124,16 @@ export default function CloseAppointment() {
       danger: true,
     });
     if (!ok) return;
-    await apptRepo.update(appt.id, { status: "cancelled" });
+    try {
+      await apptRepo.update(appt.id, { status: "cancelled" });
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "ביטול התור נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
     navigate(backTo);
   }
 

@@ -10,14 +10,8 @@ import { useDriveUpload } from "../data/useDriveUpload";
 import { useImageSrc } from "../data/useImageSrc";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { useToast } from "../context/ToastProvider";
+import { dateInputValue } from "../utils/datetime";
 import { fullName } from "./clients/clientUtils";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
 
 export default function AllPhotos() {
   const location = useLocation();
@@ -96,7 +90,7 @@ export default function AllPhotos() {
       // תמונה חדשה נוצרת ללא שיוך; החלונית שנפתחת מיד מאפשרת למלא לקוחה/פרטים.
       const newId = await repo.add({
         clientId: "",
-        date: todayInput(),
+        date: dateInputValue(new Date()),
         treatmentName: "",
         description: "",
         localData: stored.localData || null,

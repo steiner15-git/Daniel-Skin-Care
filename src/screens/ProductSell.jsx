@@ -2,15 +2,10 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../data";
+import { useConfirm } from "../context/ConfirmDialogProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
+import { dateInputValue } from "../utils/datetime";
 
 export default function ProductSell() {
   const { id } = useParams();
@@ -25,6 +20,7 @@ export default function ProductSell() {
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
 
   const p = products.find((x) => x.id === id);
 
@@ -34,7 +30,7 @@ export default function ProductSell() {
   const [qty, setQty] = useState(1);
   const [amount, setAmount] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [date, setDate] = useState(todayInput());
+  const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -59,35 +55,48 @@ export default function ProductSell() {
   const outOfStock = stock <= 0;
   const qtyInvalid = qtyNum < 1 || qtyNum > stock;
 
+  // עוטפים ב-try/catch: אם יצירת ההכנסה או עדכון המלאי נכשלים (רשת/quota),
+  // המשתמשת מקבלת הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר
+  // תקוע עם כפתור disabled בלי משוב.
   async function confirmSale() {
     setSaving(true);
-    const incomeId = await incomeRepo.add({
-      source: "product",
-      productId: p.id,
-      quantity: qtyNum,
-      // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
-      // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
-      // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
-      clientId: clientId || null,
-      clientName,
-      treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
-      note: "מכירת מוצר",
-      amount: Number(amountVal) || 0,
-      date,
-      invoiceNumber: "",
-      paymentMethod,
-      paid,
-    });
-    await productRepo.update(p.id, { stock: Math.max(0, stock - qtyNum) });
-    await log({
-      action: "product_sale",
-      entity: {
-        type: "product",
-        id: p.id,
-        desc: `${p.name}${clientName ? ` — ${clientName}` : ""}`,
-      },
-      after: { incomeId },
-    });
+    try {
+      const incomeId = await incomeRepo.add({
+        source: "product",
+        productId: p.id,
+        quantity: qtyNum,
+        // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
+        // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
+        // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
+        clientId: clientId || null,
+        clientName,
+        treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
+        note: "מכירת מוצר",
+        amount: Number(amountVal) || 0,
+        date,
+        invoiceNumber: "",
+        paymentMethod,
+        paid,
+      });
+      await productRepo.update(p.id, { stock: Math.max(0, stock - qtyNum) });
+      await log({
+        action: "product_sale",
+        entity: {
+          type: "product",
+          id: p.id,
+          desc: `${p.name}${clientName ? ` — ${clientName}` : ""}`,
+        },
+        after: { incomeId },
+      });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "המכירה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
     navigate(backTo);
   }
 

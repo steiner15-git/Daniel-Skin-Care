@@ -6,15 +6,9 @@ import { useDriveUpload } from "../../data/useDriveUpload";
 import { useImageSrc } from "../../data/useImageSrc";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
+import { dateInputValue } from "../../utils/datetime";
 import { SkeletonAlbumGrid } from "../../components/Skeleton";
 import PhotoDetailModal from "../../components/PhotoDetailModal";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
 
 export default function ClientAlbum({ clientId, clientName }) {
   const { items, loading } = useCollectionData("photos");
@@ -49,7 +43,7 @@ export default function ClientAlbum({ clientId, clientName }) {
       const stored = await driveUpload.upload(file, ["Clinic_Photos", clientName]);
       await repo.add({
         clientId,
-        date: todayInput(),
+        date: dateInputValue(new Date()),
         description: "",
         localData: stored.localData || null,
         driveFileId: stored.driveFileId || null,

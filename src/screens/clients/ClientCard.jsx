@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
+import { where } from "firebase/firestore";
 import ScreenHeader from "../../components/ScreenHeader";
 import PaymentBadge from "../../components/PaymentBadge";
 import ClientBasicFields from "./ClientBasicFields";
@@ -24,7 +25,13 @@ export default function ClientCard() {
   const navigate = useNavigate();
   const location = useLocation();
   const { items: clients, loading } = useCollectionData("clients");
-  const { items: appts } = useCollectionData("appointments");
+  // מסוננת בצד השרת לפי clientId — במקום להוריד את כל קולקציית התורים
+  // ולסנן בזיכרון (מיותר משמעותית עם היסטוריית תורים גדולה). ב-Firestore
+  // הופך למנוי עצמאי עם where(); במצב מקומי (localStore.js) ה-constraint
+  // מתעלם ממנו במכוון וממשיך להחזיר את כל האוסף — הפילטור בזיכרון למטה
+  // (AppointmentsTab, ProductsTab דרך useCollectionData("income") נפרד)
+  // כבר קיים ומטפל בשני המצבים באופן זהה.
+  const { items: appts } = useCollectionData("appointments", where("clientId", "==", id));
   const repo = useRepo("clients");
   const log = useAuditLog();
   const confirmDialog = useConfirm();
@@ -213,9 +220,11 @@ function AppointmentsTab({ appts, clientId }) {
     return map;
   }, [income]);
 
-  // תור שבוטל ביומן נשאר ברשומות (לצורך היסטוריה/דוחות) אך מסומן status:
-  // "cancelled" ואינו נמחק — לכן יש לסנן אותו כאן בדיוק כפי שהיומן (Calendar.jsx)
-  // עושה, אחרת תור מבוטל "נדבק" לרשימת התורים של הלקוחה לנצח.
+  // appts כבר מגיע מסונן לפי clientId מ-Firestore (where clientId==clientId);
+  // עדיין מסננים כאן status!=="cancelled" בזיכרון — תור שבוטל ביומן נשאר
+  // ברשומות (לצורך היסטוריה/דוחות) אך מסומן status:"cancelled" ואינו נמחק,
+  // בדיוק כפי שהיומן (Calendar.jsx) עושה, אחרת תור מבוטל "נדבק" לרשימת
+  // התורים של הלקוחה לנצח.
   const mine = appts.filter((a) => a.clientId === clientId && a.status !== "cancelled");
   const now = Date.now();
   const past = mine
