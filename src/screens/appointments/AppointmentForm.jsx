@@ -8,17 +8,10 @@ import {
   useSettingDoc,
 } from "../../data";
 import { fullName } from "../clients/clientUtils";
-import { combine, overlaps, weekday, formatTime } from "../../utils/datetime";
+import { combine, overlaps, weekday, formatTime, dateInputValue } from "../../utils/datetime";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
 
 export default function AppointmentForm() {
   const { id } = useParams();
@@ -49,7 +42,7 @@ export default function AppointmentForm() {
     treatmentId: "",
     treatmentName: "",
     price: "",
-    date: todayInput(),
+    date: dateInputValue(new Date()),
     time: "09:00",
     durationMin: 60,
     sendInvite: false,
@@ -77,9 +70,7 @@ export default function AppointmentForm() {
       treatmentId: editing.treatmentId || "",
       treatmentName: editing.treatmentName || "",
       price: editing.price ?? "",
-      date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`,
+      date: dateInputValue(d),
       time: formatTime(editing.start),
       durationMin: editing.durationMin || 60,
       sendInvite: !!editing.sendInvite,

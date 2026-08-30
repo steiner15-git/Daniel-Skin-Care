@@ -3,14 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
 import { formatILS } from "../../utils/money";
+import { dateInputValue } from "../../utils/datetime";
 import ReceiptField from "../../components/ReceiptField";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
 
 export default function ExpenseForm() {
   const { id } = useParams();
@@ -25,7 +19,7 @@ export default function ExpenseForm() {
   const editing = isEdit ? items.find((r) => r.id === id) : null;
 
   const [form, setForm] = useState({
-    date: todayInput(),
+    date: dateInputValue(new Date()),
     description: "",
     businessName: "",
     invoiceNumber: "",

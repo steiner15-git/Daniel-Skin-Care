@@ -2,15 +2,10 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../data";
+import { useConfirm } from "../context/ConfirmDialogProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
+import { dateInputValue } from "../utils/datetime";
 
 export default function SeriesPurchase() {
   const { id } = useParams();
@@ -25,6 +20,7 @@ export default function SeriesPurchase() {
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const log = useAuditLog();
+  const confirmDialog = useConfirm();
 
   const s = series.find((x) => x.id === id);
 
@@ -33,7 +29,7 @@ export default function SeriesPurchase() {
   const [clientQuery, setClientQuery] = useState("");
   const [amount, setAmount] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [date, setDate] = useState(todayInput());
+  const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -54,37 +50,49 @@ export default function SeriesPurchase() {
 
   const amountVal = amount == null ? s.price ?? 0 : amount;
 
+  // עוטפים ב-try/catch: אם יצירת ההכנסה או החבילה נכשלת (רשת/quota), המשתמשת
+  // מקבלת הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר תקוע.
   async function confirmPurchase() {
     setSaving(true);
-    const incomeId = await incomeRepo.add({
-      source: "series",
-      seriesId: s.id,
-      clientName,
-      treatmentName: s.name,
-      amount: Number(amountVal) || 0,
-      date,
-      invoiceNumber: "",
-      paymentMethod,
-      paid,
-    });
-    const packageId = await packageRepo.add({
-      clientId,
-      clientName,
-      seriesId: s.id,
-      seriesName: s.name,
-      treatmentIds: s.treatmentIds || (s.treatmentId ? [s.treatmentId] : []),
-      treatmentName: s.treatmentName,
-      totalSessions: Number(s.sessions) || 0,
-      remainingSessions: Number(s.sessions) || 0,
-      purchaseDate: date,
-      expiryDate: s.expiryDate || null,
-      incomeId,
-      status: "active",
-    });
-    await log({
-      action: "series_purchase",
-      entity: { type: "clientPackage", id: packageId, desc: `${clientName} — ${s.name}` },
-    });
+    try {
+      const incomeId = await incomeRepo.add({
+        source: "series",
+        seriesId: s.id,
+        clientName,
+        treatmentName: s.name,
+        amount: Number(amountVal) || 0,
+        date,
+        invoiceNumber: "",
+        paymentMethod,
+        paid,
+      });
+      const packageId = await packageRepo.add({
+        clientId,
+        clientName,
+        seriesId: s.id,
+        seriesName: s.name,
+        treatmentIds: s.treatmentIds || (s.treatmentId ? [s.treatmentId] : []),
+        treatmentName: s.treatmentName,
+        totalSessions: Number(s.sessions) || 0,
+        remainingSessions: Number(s.sessions) || 0,
+        purchaseDate: date,
+        expiryDate: s.expiryDate || null,
+        incomeId,
+        status: "active",
+      });
+      await log({
+        action: "series_purchase",
+        entity: { type: "clientPackage", id: packageId, desc: `${clientName} — ${s.name}` },
+      });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "רכישת הסדרה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
     navigate(backTo);
   }
 

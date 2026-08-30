@@ -3,14 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import TimeField from "../../components/TimeField";
 import { useCollectionData, useRepo } from "../../data";
-import { combine, formatTime } from "../../utils/datetime";
-
-function todayInput() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
+import { combine, formatTime, dateInputValue } from "../../utils/datetime";
 
 function minutesBetween(startTime, endTime) {
   const [sh, sm] = startTime.split(":").map(Number);
@@ -28,7 +21,7 @@ export default function EventForm() {
 
   const [form, setForm] = useState({
     title: "",
-    date: todayInput(),
+    date: dateInputValue(new Date()),
     startTime: "10:00",
     endTime: "11:00",
     note: "",
@@ -41,9 +34,7 @@ export default function EventForm() {
     const end = new Date(d.getTime() + (editing.durationMin || 60) * 60000);
     setForm({
       title: editing.title || "",
-      date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`,
+      date: dateInputValue(d),
       startTime,
       endTime: `${String(end.getHours()).padStart(2, "0")}:${String(
         end.getMinutes()
