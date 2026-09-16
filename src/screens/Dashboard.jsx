@@ -9,6 +9,7 @@ import {
   unverifiedIncome,
   inactiveClients,
   expiringPackages,
+  lowStockProducts,
 } from "../utils/reminders";
 import { formatTime, formatDate, sameDay } from "../utils/datetime";
 import { fullName, ageFromBirthday } from "./clients/clientUtils";
@@ -45,6 +46,7 @@ export default function Dashboard() {
   const { items: income } = useCollectionData("income");
   const { items: clients } = useCollectionData("clients");
   const { items: packages } = useCollectionData("clientPackages");
+  const { items: products } = useCollectionData("products");
   const { data: reminders } = useReminderSettings();
   const { data: business } = useSettingDoc("business");
 
@@ -104,6 +106,10 @@ export default function Dashboard() {
     [packages, reminders.packageExpiryDays]
   );
 
+  // מוצרים במלאי נמוך/שאזלו (Phase 4 §4) — אותה לוגיקה כמו התגית במסך
+  // המוצרים עצמו, ריכוז ב-utils/reminders.js כדי לא לשכפל.
+  const lowStock = useMemo(() => lowStockProducts(products), [products]);
+
   return (
     <>
       <ScreenHeader title="בית" logo={business?.logoData} action={<GearButton />} />
@@ -160,7 +166,11 @@ export default function Dashboard() {
       )}
 
       {/* תזכורות */}
-      {(birthdays.length > 0 || unpaid.length > 0 || inactive.length > 0 || expiring.length > 0) && (
+      {(birthdays.length > 0 ||
+        unpaid.length > 0 ||
+        inactive.length > 0 ||
+        expiring.length > 0 ||
+        lowStock.length > 0) && (
         <>
           <h3 className="group-title">תזכורות</h3>
           <div className="card reminders">
@@ -192,6 +202,14 @@ export default function Dashboard() {
                 onClick={() => navigate("/series?tab=purchases&filter=expiring")}
               >
                 📦 {expiring.length} חבילות עומדות לפוג בקרוב →
+              </button>
+            )}
+            {lowStock.length > 0 && (
+              <button
+                className="reminder reminder--link"
+                onClick={() => navigate("/products")}
+              >
+                🧴 {lowStock.length} מוצרים במלאי נמוך או שאזלו →
               </button>
             )}
           </div>

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
-import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { useCollectionData, useRepo, useBatchRepo, useSettingDoc, useAuditLog } from "../../data";
 import { formatDateTime, dateInputValue } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
@@ -13,9 +13,11 @@ export default function CloseAppointment() {
   const backTo = location.state?.from === "dashboard" ? "/" : "/calendar";
   const { items: appts, loading } = useCollectionData("appointments");
   const { items: packages } = useCollectionData("clientPackages");
+  // apptRepo נשאר בשימוש רק לביטול תור (כתיבה בודדת, לא זקוקה ל-batch).
+  // שני מסלולי הסגירה עצמם (חיוב מחבילה / הכנסה רגילה) עברו ל-useBatchRepo
+  // (Phase 4 §2) — ראו הערה מפורטת ליד confirmFromPackage/confirmDone למטה.
   const apptRepo = useRepo("appointments");
-  const incomeRepo = useRepo("income");
-  const packageRepo = useRepo("clientPackages");
+  const batchRepo = useBatchRepo();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const log = useAuditLog();
@@ -48,22 +50,37 @@ export default function CloseAppointment() {
     (pkg.remainingSessions ?? 0) > 0 &&
     (!pkg.expiryDate || new Date(pkg.expiryDate) >= t0);
 
-  // עוטפים בכל פעולת אישור ב-try/catch: אם כתיבה ל-Firestore נכשלת (רשת,
-  // quota וכו') המשתמשת מקבלת הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום
-  // שהמסך יישאר תקוע עם כפתור disabled בלי שום משוב.
+  // Phase 4 §2 — אטומיות: לפני התיקון, ניכוי המפגש מהחבילה (clientPackages)
+  // וסימון התור כ-"done" היו שתי כתיבות repo נפרדות. כשל רשת בין השתיים
+  // היה יכול להשאיר חבילה עם מפגש מנוכה אך תור שלא סומן כסגור (או להפך),
+  // ללא דרך לזהות/לתקן זאת אוטומטית. writeBatch מבטיח ששתי הכתיבות
+  // מצליחות יחד או נכשלות יחד — אותו דפוס בדיוק כמו ב-SeriesPurchase.jsx
+  // ו-ProductSell.jsx (ראו הערת התיעוד ב-data/firestore.js).
   async function confirmFromPackage() {
     setSaving(true);
     const remaining = (pkg.remainingSessions ?? 0) - 1;
     try {
-      await packageRepo.update(pkg.id, {
-        remainingSessions: remaining,
-        status: remaining <= 0 ? "used" : "active",
-      });
-      await apptRepo.update(appt.id, {
-        status: "done",
-        chargedFromPackage: true,
-        clientPackageId: pkg.id,
-      });
+      await batchRepo.commit([
+        {
+          name: "clientPackages",
+          id: pkg.id,
+          type: "update",
+          data: {
+            remainingSessions: remaining,
+            status: remaining <= 0 ? "used" : "active",
+          },
+        },
+        {
+          name: "appointments",
+          id: appt.id,
+          type: "update",
+          data: {
+            status: "done",
+            chargedFromPackage: true,
+            clientPackageId: pkg.id,
+          },
+        },
+      ]);
       await log({
         action: "package_charge",
         entity: { type: "clientPackage", id: pkg.id, desc: `${appt.clientName} — ${pkg.seriesName}` },
@@ -82,28 +99,47 @@ export default function CloseAppointment() {
     navigate(backTo);
   }
 
+  // Phase 4 §2 — אטומיות: לפני התיקון, יצירת רשומת ה-income וסימון התור
+  // כ-"done" היו שתי כתיבות repo נפרדות (incomeRepo.add ואז apptRepo.update).
+  // כשל רשת בין השתיים היה יכול ליצור הכנסה "יתומה" בלי תור מעודכן, או
+  // תור שנשאר "ממתין לסגירה" בעוד שהכנסה כבר נוצרה. עברו יחד ל-writeBatch
+  // דרך useBatchRepo — מזהה ההכנסה נוצר מראש עם batchRepo.newId() כדי
+  // שאפשר יהיה לכתוב אותו כ-incomeId על רשומת התור באותו batch.
   async function confirmDone() {
     setSaving(true);
     try {
-      const incomeId = await incomeRepo.add({
-        source: "appointment",
-        appointmentId: appt.id,
-        clientName: appt.clientName || "",
-        treatmentName: appt.treatmentName || "",
-        amount: Number(amountVal) || 0,
-        date,
-        invoiceNumber: "",
-        paymentMethod,
-        paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
-      });
-      await apptRepo.update(appt.id, {
-        status: "done",
-        incomeId,
-        paymentMethod,
-        // החבילה פקעה/נגמרה — התור חויב רגיל, מנתקים את הקישור לחבילה
-        clientPackageId: null,
-        chargedFromPackage: false,
-      });
+      const incomeId = batchRepo.newId("income");
+      await batchRepo.commit([
+        {
+          name: "income",
+          id: incomeId,
+          type: "add",
+          data: {
+            source: "appointment",
+            appointmentId: appt.id,
+            clientName: appt.clientName || "",
+            treatmentName: appt.treatmentName || "",
+            amount: Number(amountVal) || 0,
+            date,
+            invoiceNumber: "",
+            paymentMethod,
+            paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
+          },
+        },
+        {
+          name: "appointments",
+          id: appt.id,
+          type: "update",
+          data: {
+            status: "done",
+            incomeId,
+            paymentMethod,
+            // החבילה פקעה/נגמרה — התור חויב רגיל, מנתקים את הקישור לחבילה
+            clientPackageId: null,
+            chargedFromPackage: false,
+          },
+        },
+      ]);
     } catch (e) {
       setSaving(false);
       await confirmDialog({
