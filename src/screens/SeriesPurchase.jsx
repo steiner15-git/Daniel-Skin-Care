@@ -70,6 +70,14 @@ export default function SeriesPurchase() {
           data: {
             source: "series",
             seriesId: s.id,
+            // Phase 4 §3: clientId נשמר כאן (בנוסף ל-clientName), באותו דפוס
+            // שכבר יושם ב-ProductSell.jsx (addendum #14) עבור source:"product".
+            // בלעדיו, מסכים עתידיים שמזהים לקוחה לפי income.clientId (למשל
+            // הרחבה עתידית של טאב "מוצרים" בכרטיסיית הלקוחה גם לסדרות) לא
+            // יוכלו לשייך רכישת סדרה ללקוחה בוודאות — רק דרך clientPackages.
+            // רכישות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId על
+            // רשומת ה-income שלהן (מגבלה על נתונים היסטוריים, לא באג פעיל).
+            clientId: clientId || null,
             clientName,
             treatmentName: s.name,
             amount: Number(amountVal) || 0,

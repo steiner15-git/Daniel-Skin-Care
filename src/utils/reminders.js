@@ -64,3 +64,15 @@ export function expiringPackages(packages, days, now = new Date()) {
     .filter((x) => x.daysUntil <= days)
     .sort((a, b) => a.daysUntil - b.daysUntil);
 }
+
+// Phase 4 §4 — מוצרים שאזלו מהמלאי או ירדו לסף ההתראה. אותו קריטריון
+// בדיוק כמו התגית "אזל מהמלאי"/"מלאי נמוך" שכבר מוצגת במסך המוצרים
+// (Products.jsx: p.stock<=0 → "אזל", אחרת p.stock<=lowStockThreshold →
+// "מלאי נמוך") — ריכוז כאן כדי שגם הדשבורד ישתמש באותה לוגיקה בדיוק,
+// בלי לשכפל אותה. מוצר בלי סף מוגדר (lowStockThreshold=0, ברירת מחדל)
+// נכלל רק כשהמלאי אזל לגמרי. ממוין מהחסר ביותר.
+export function lowStockProducts(products) {
+  return products
+    .filter((p) => (p.stock ?? 0) <= 0 || (p.stock ?? 0) <= (p.lowStockThreshold || 0))
+    .sort((a, b) => (a.stock ?? 0) - (b.stock ?? 0));
+}

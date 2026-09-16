@@ -1,11 +1,48 @@
+import { useMemo, useState } from "react";
 import DateField from "../../components/DateField";
+import { fullName } from "./clientUtils";
 
 const SOURCES = ["המלצה", "אינסטגרם", "פייסבוק", "גוגל", "פרסום ממומן", "פלאייר", "לקוחה חוזרת", "רשת חברתית אחרת", "אחר"];
 
+// Phase 4 §6: כאשר מקור ההגעה הוא "המלצה", מוצג שדה נוסף לבחירת הלקוחה
+// המפנה מתוך המאגר — מרחיב את שדה ה-source הטקסטואלי הקיים לקישור קונקרטי
+// בין שתי רשומות לקוחה (client.referredByClientId).
+const REFERRAL_SOURCE = "המלצה";
+
 // שדות פרטים בסיסיים (שלב 1). רכיב מבוקר — משמש בהוספה ובעריכה.
-export default function ClientBasicFields({ value, onChange, duplicatePhone }) {
+// clients: רשימת הלקוחות המלאה, לצורך חיפוש הלקוחה המפנה (Phase 4 §6).
+// excludeClientId: מזהה הלקוחה הנוכחית (בעריכה בלבד) — נמנעת מהצעה עצמית.
+export default function ClientBasicFields({
+  value,
+  onChange,
+  duplicatePhone,
+  clients = [],
+  excludeClientId,
+}) {
   function set(k, v) {
     onChange({ ...value, [k]: v });
+  }
+
+  // מצב חיפוש הלקוחה המפנה — שדה UI זמני בלבד, לא נשמר על הרשומה עצמה
+  // (הערך הנשמר הוא רק referredByClientId שנבחר).
+  const [referralQuery, setReferralQuery] = useState("");
+
+  const referredClient = useMemo(
+    () => clients.find((c) => c.id === value.referredByClientId) || null,
+    [clients, value.referredByClientId]
+  );
+
+  const filteredReferrers = useMemo(() => {
+    const term = referralQuery.trim();
+    if (!term) return [];
+    return clients
+      .filter((c) => c.id !== excludeClientId && !c.archived && fullName(c).includes(term))
+      .slice(0, 6);
+  }, [clients, referralQuery, excludeClientId]);
+
+  function pickReferrer(c) {
+    set("referredByClientId", c.id);
+    setReferralQuery("");
   }
 
   return (
@@ -70,6 +107,52 @@ export default function ClientBasicFields({ value, onChange, duplicatePhone }) {
           </select>
         </div>
       </div>
+
+      {/* Phase 4 §6 — לקוחה מפנה: מוצג רק כשמקור ההגעה הוא "המלצה" */}
+      {value.source === REFERRAL_SOURCE && (
+        <div className="field">
+          <label>הופנתה ע״י (אופציונלי)</label>
+          {referredClient ? (
+            <div className="picked">
+              <strong>{fullName(referredClient)}</strong>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => set("referredByClientId", "")}
+              >
+                שינוי
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                placeholder="חיפוש לקוחה מפנה"
+                value={referralQuery}
+                onChange={(e) => setReferralQuery(e.target.value)}
+              />
+              {filteredReferrers.length > 0 && (
+                <div className="suggest">
+                  {filteredReferrers.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="suggest__item"
+                      onClick={() => pickReferrer(c)}
+                    >
+                      {fullName(c)}{" "}
+                      {c.phone && (
+                        <span className="muted" dir="ltr">
+                          {c.phone}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="field" style={{ marginBottom: 0 }}>
         <label>הערות פנימיות חסויות (גלוי רק לך, לעולם לא נשלח החוצה)</label>

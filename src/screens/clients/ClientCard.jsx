@@ -113,6 +113,7 @@ export default function ClientCard() {
       {tab === "details" && (
         <DetailsTab
           client={client}
+          clients={clients}
           editing={editing}
           draft={draft}
           setDraft={setDraft}
@@ -136,6 +137,7 @@ export default function ClientCard() {
 
 function DetailsTab({
   client,
+  clients,
   editing,
   draft,
   setDraft,
@@ -146,10 +148,27 @@ function DetailsTab({
   onArchive,
   id,
 }) {
+  // Phase 4 §6 — "הופנתה ע״י": שם הלקוחה המפנה (אם קיים), ו"לקוחות שהופנו
+  // ע״י לקוחה זו" (חיפוש הפוך: מי מצביע אליה דרך referredByClientId).
+  const referrer = useMemo(
+    () => (client.referredByClientId ? clients.find((c) => c.id === client.referredByClientId) : null),
+    [clients, client.referredByClientId]
+  );
+  const referredClients = useMemo(
+    () => clients.filter((c) => c.referredByClientId === id && !c.archived),
+    [clients, id]
+  );
+
   if (editing) {
     return (
       <>
-        <ClientBasicFields value={draft} onChange={setDraft} duplicatePhone={duplicatePhone} />
+        <ClientBasicFields
+          value={draft}
+          onChange={setDraft}
+          duplicatePhone={duplicatePhone}
+          clients={clients}
+          excludeClientId={id}
+        />
         <div className="save-row">
           <button className="btn btn--muted" onClick={onCancel}>
             ביטול
@@ -178,6 +197,16 @@ function DetailsTab({
           value={client.birthday ? `${client.birthday}${age != null ? ` · גיל ${age}` : ""}` : "—"}
         />
         <ReadRow label="מקור הגעה" value={client.source || "—"} />
+        {client.referredByClientId && (
+          <div className="read-row">
+            <span className="muted">הופנתה ע״י</span>
+            {referrer ? (
+              <Link to={`/clients/${referrer.id}`}>{fullName(referrer)} ‹</Link>
+            ) : (
+              <span className="muted">— לקוחה לא נמצאה —</span>
+            )}
+          </div>
+        )}
         {client.notes && (
           <div className="read-row read-row--col">
             <span className="muted">הערות פנימיות חסויות</span>
@@ -195,6 +224,22 @@ function DetailsTab({
         </div>
         <DiagnosisSummary value={client.diagnosis || {}} />
       </div>
+
+      {referredClients.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 12 }}>לקוחות שהופנו ע״י לקוחה זו ({referredClients.length})</h3>
+          <div className="list">
+            {referredClients.map((c) => (
+              <Link key={c.id} to={`/clients/${c.id}`} className="card list-item">
+                <div className="list-item__main">
+                  <strong>{fullName(c)}</strong>
+                </div>
+                <span className="nav-card__chev">‹</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="save-row" style={{ marginTop: 16 }}>
         <button className="btn btn--muted" onClick={onArchive}>

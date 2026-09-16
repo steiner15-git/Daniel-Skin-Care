@@ -56,6 +56,7 @@ export default function AddClient() {
             value={basic}
             onChange={setBasic}
             duplicatePhone={duplicatePhone}
+            clients={clients}
           />
           <div className="save-row">
             <button className="btn" disabled={!canProceed} onClick={() => setStep(2)}>
