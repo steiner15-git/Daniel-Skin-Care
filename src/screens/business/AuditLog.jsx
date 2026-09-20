@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
-import { useCollectionData } from "../../data";
+import { useMultiYearCollectionData } from "../../data";
 
 const ACTION_LABELS = {
   income_edit: "עריכת הכנסה",
@@ -21,7 +21,12 @@ const ACTION_LABELS = {
   package_edit: "עריכת חבילת לקוחה",
   package_delete: "מחיקת חבילת לקוחה",
   appointment_delete: "מחיקת תור",
+  appointment_cancel: "ביטול תור",
 };
+
+const CURRENT_YEAR = new Date().getFullYear();
+// Phase 4 §9 — ברירת מחדל: שנה נוכחית + קודמת (2 שנים).
+const DEFAULT_YEAR_SPAN = 2;
 
 function tsToStr(ts) {
   if (!ts) return "";
@@ -32,7 +37,23 @@ function tsToStr(ts) {
 
 export default function AuditLog() {
   const navigate = useNavigate();
-  const { items, loading } = useCollectionData("auditLog");
+
+  // Phase 4 §9 — yearSpan גדל בלחיצה על "טעני שנים קודמות"; כל שנה מקבלת
+  // מנוי חי משלה (useMultiYearCollectionData), כך שגם רשומות שנטענו
+  // מ"העבר" נשארות מסונכרנות בזמן אמת, ולא נהיות תמונת-מצב קפואה.
+  const [yearSpan, setYearSpan] = useState(DEFAULT_YEAR_SPAN);
+  const years = useMemo(
+    () => Array.from({ length: yearSpan }, (_, i) => CURRENT_YEAR - i),
+    [yearSpan]
+  );
+  const oldestYearShown = years[years.length - 1];
+
+  // auditLog.ts הוא Firestore Timestamp (serverTimestamp()) ולא מחרוזת ISO
+  // כמו income.date/appointments.start — timestampField:true בונה את גבולות
+  // הטווח כאובייקטי Date במקום כמחרוזות "YYYY-01-01".
+  const { items, loading } = useMultiYearCollectionData("auditLog", "ts", years, {
+    timestampField: true,
+  });
 
   const sorted = useMemo(() => {
     return items.slice().sort((a, b) => {
@@ -55,12 +76,13 @@ export default function AuditLog() {
 
       <div className="notice" style={{ marginTop: 0 }}>
         תיעוד פעולות רגישות על נתונים פיננסיים ולקוחות — רשת ביטחון למעקב ולשחזור מידע.
+        מוצגות רשומות משנת {oldestYearShown} ואילך.
       </div>
 
       {loading ? (
         <p className="muted">טוען…</p>
       ) : sorted.length === 0 ? (
-        <div className="empty-state">אין עדיין רשומות בלוג.</div>
+        <div className="empty-state">אין רשומות בלוג בטווח המוצג.</div>
       ) : (
         <div className="list">
           {sorted.map((r) => (
@@ -80,6 +102,14 @@ export default function AuditLog() {
           ))}
         </div>
       )}
+
+      <button
+        className="btn btn--ghost btn--block"
+        style={{ marginTop: 16 }}
+        onClick={() => setYearSpan((n) => n + 1)}
+      >
+        טעני שנים קודמות ({oldestYearShown - 1} ואילך)
+      </button>
     </>
   );
 }

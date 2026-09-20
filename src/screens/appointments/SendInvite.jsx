@@ -6,6 +6,7 @@ import {
   inviteTokens,
   mailtoUrl,
   gcalUrl,
+  whatsappUrl,
   DEFAULT_INVITATION_SUBJECT,
   DEFAULT_INVITATION_BODY,
 } from "../../utils/invite";
@@ -18,6 +19,7 @@ export default function SendInvite() {
   const from = location.state?.from === "appointments" ? "appointments" : "calendar";
 
   const { items: appts, loading } = useCollectionData("appointments");
+  const { items: clients } = useCollectionData("clients");
   const repo = useRepo("appointments");
   const { data: business } = useSettingDoc("business");
   const { data: invitation } = useSettingDoc("invitation");
@@ -37,6 +39,12 @@ export default function SendInvite() {
       </>
     );
 
+  // Phase 4 §7 — טלפון: ללקוחה קיימת נשאב מכרטיס הלקוחה (הוא לא נשמר על
+  // רשומת התור עבור לקוחה קיימת); ללקוחה שהוזנה ידנית appt.phone כבר מכיל
+  // אותו ישירות (ראו AppointmentForm.jsx).
+  const client = appt.clientId ? clients.find((c) => c.id === appt.clientId) : null;
+  const phone = client?.phone || appt.phone || "";
+
   const tokens = inviteTokens({ business, clientName: appt.clientName, appt });
   // אם מסך ההגדרות "תוכן זימון" מעולם לא נשמר בפועל (המסמך לא קיים ב-Firestore),
   // invitation?.subject/body הם undefined — נופלים לברירת מחדל מלאה בקוד, כדי
@@ -53,7 +61,8 @@ export default function SendInvite() {
     location: business?.address || "",
   });
 
-  // הקישור נכנס לגוף המייל — לחיצה אחת של הלקוחה מוסיפה את התור ליומן שלה
+  // הקישור נכנס לגוף ההודעה — לחיצה אחת של הלקוחה מוסיפה את התור ליומן שלה.
+  // אותו טקסט משמש גם למייל וגם להודעת WhatsApp (ל-WhatsApp אין נושא נפרד).
   const body = `${baseBody}\n\nלהוספת התור ליומן שלך:\n${calendarLink}`;
 
   function openMail() {
@@ -69,6 +78,14 @@ export default function SendInvite() {
     link.click();
     document.body.removeChild(link);
     repo.update(appt.id, { inviteSent: true });
+  }
+
+  // Phase 4 §7 — פתיחת wa.me בכרטיסייה/חלון חדש (לא ניווט ישיר בעמוד
+  // הנוכחי) כדי לא לאבד את מסך "שליחת זימון" אם המשתמשת חוזרת אחורה.
+  function openWhatsapp() {
+    const url = whatsappUrl(phone, body);
+    window.open(url, "_blank", "noopener");
+    repo.update(appt.id, { inviteSentWhatsapp: true });
   }
 
   return (
@@ -99,16 +116,25 @@ export default function SendInvite() {
           <span className="muted">אימייל</span>
           <span dir="ltr">{appt.email || "— חסר —"}</span>
         </div>
+        <div className="read-row">
+          <span className="muted">טלפון</span>
+          <span dir="ltr">{phone || "— חסר —"}</span>
+        </div>
       </div>
 
       {!appt.email && (
         <div className="warn-text" style={{ marginTop: 12 }}>
-          ⚠ ללקוחה אין אימייל. הוסיפי אימייל בכרטיסיית הלקוחה כדי לשלוח זימון.
+          ⚠ ללקוחה אין אימייל. הוסיפי אימייל בכרטיסיית הלקוחה כדי לשלוח זימון במייל.
+        </div>
+      )}
+      {!phone && (
+        <div className="warn-text" style={{ marginTop: 12 }}>
+          ⚠ ללקוחה אין מספר טלפון. הוסיפי טלפון בכרטיסיית הלקוחה כדי לשלוח זימון בוואטסאפ.
         </div>
       )}
 
       <div className="notice">
-        המייל נפתח מוכן עם קישור "הוסף ליומן Google" בתוכו — הלקוחה לוחצת עליו והתור נכנס
+        ההודעה נפתחת מוכנה עם קישור "הוסף ליומן Google" בתוכה — הלקוחה לוחצת עליו והתור נכנס
         ליומן שלה. לחיצה אחת, ללא צירוף קובץ. התוכן אינו כולל מחיר, לפי עקרון הפרטיות.
       </div>
 
@@ -116,11 +142,19 @@ export default function SendInvite() {
         <button className="btn btn--block" disabled={!appt.email} onClick={openMail}>
           ✉ פתיחת טיוטת מייל (כולל קישור ליומן)
         </button>
+        <button className="btn btn--block btn--ghost" disabled={!phone} onClick={openWhatsapp}>
+          💬 פתיחת הודעת WhatsApp (כולל קישור ליומן)
+        </button>
       </div>
 
       {appt.inviteSent && (
         <p className="save-row__ok" style={{ textAlign: "center", marginTop: 12 }}>
-          הזימון סומן כנשלח ✓ (ניתן לשלוח שוב בכל עת)
+          הזימון במייל סומן כנשלח ✓ (ניתן לשלוח שוב בכל עת)
+        </p>
+      )}
+      {appt.inviteSentWhatsapp && (
+        <p className="save-row__ok" style={{ textAlign: "center", marginTop: 4 }}>
+          הזימון בוואטסאפ סומן כנשלח ✓ (ניתן לשלוח שוב בכל עת)
         </p>
       )}
     </>

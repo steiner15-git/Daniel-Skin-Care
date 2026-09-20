@@ -1,7 +1,7 @@
 // שכבת נתונים מקומית (localStorage) — משמשת במצב תצוגה מקומי (VITE_DEV_USER=1)
 // כתחליף ל-Firestore כשההתחברות/הרשת חסומות. חושפת בדיוק את אותו API
 // כמו data/firestore.js כך שהמסכים אינם יודעים באיזה backend הם משתמשים.
-import { useEffect, useReducer } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 
 const PREFIX = "dsc:";
 const bus = new EventTarget();
@@ -43,6 +43,17 @@ function writeDoc(key, obj) {
   emit();
 }
 
+// Phase 4 §9 — שנה של ערך שדה תאריך, בין אם הוא מחרוזת ISO ("YYYY-MM-DD"/
+// "YYYY-MM-DDTHH:MM", כמו income.date/expenses.date/appointments.start)
+// ובין אם הוא מספר (auditLog.ts במצב מקומי, ראו useAuditLog למטה — הפוך
+// מהמצב בענן שם ts הוא Firestore Timestamp).
+function yearOf(value) {
+  if (value == null) return null;
+  if (typeof value === "number") return new Date(value).getFullYear();
+  const y = Number(String(value).slice(0, 4));
+  return Number.isNaN(y) ? null : y;
+}
+
 export function useSettingDoc(key) {
   useBus();
   const data = readDoc(key);
@@ -56,6 +67,25 @@ export function useSettingDoc(key) {
 export function useCollectionData(name) {
   useBus();
   return { items: readColl(name), loading: false };
+}
+
+// Phase 4 §9 — מקביל ל-useYearRangeCollectionData של firestore.js: מכיוון
+// שבמצב מקומי הכול כבר בזיכרון (localStorage), אין עלות שאילתה אמיתית —
+// פשוט מסננים בצד הלקוח לפי שנה, עם אותה חתימת פונקציה בדיוק לשמירה על
+// תאימות API בין שני ה-backends.
+export function useYearRangeCollectionData(name, dateField, year) {
+  useBus();
+  const items = readColl(name).filter((r) => yearOf(r[dateField]) === year);
+  return { items, loading: false };
+}
+
+// Phase 4 §9 — מקביל ל-useMultiYearCollectionData: אותו סינון, על פני
+// קבוצת שנים.
+export function useMultiYearCollectionData(name, dateField, years) {
+  useBus();
+  const yearSet = useMemo(() => new Set(years), [JSON.stringify(years)]);
+  const items = readColl(name).filter((r) => yearSet.has(yearOf(r[dateField])));
+  return { items, loading: false };
 }
 
 export function useRepo(name) {

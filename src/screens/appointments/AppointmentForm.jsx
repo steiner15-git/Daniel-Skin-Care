@@ -46,6 +46,12 @@ export default function AppointmentForm() {
     time: "09:00",
     durationMin: 60,
     sendInvite: false,
+    // Phase 4 §7 — נגזר מהעדפת client.whatsappInvite בעת בחירת לקוחה קיימת
+    // (ראו pickClient למטה); קובע, יחד עם sendInvite, אם לנווט אוטומטית
+    // למסך "שליחת זימון" לאחר שמירה. שם שדה נפרד מ-client.whatsappInvite
+    // (שדה ההעדפה על הלקוחה עצמה) כדי לא לבלבל בין השניים — מקביל למבנה
+    // הקיים של sendInvite/client.emailInvite.
+    sendInviteWhatsapp: false,
     chargeFromPackage: false,
     clientPackageId: "",
   });
@@ -74,6 +80,7 @@ export default function AppointmentForm() {
       time: formatTime(editing.start),
       durationMin: editing.durationMin || 60,
       sendInvite: !!editing.sendInvite,
+      sendInviteWhatsapp: false,
       chargeFromPackage: !!editing.clientPackageId,
       clientPackageId: editing.clientPackageId || "",
     });
@@ -90,6 +97,7 @@ export default function AppointmentForm() {
       clientName: fullName(c),
       email: c.email || "",
       sendInvite: !!c.emailInvite, // ברירת מחדל מפרופיל הלקוחה
+      sendInviteWhatsapp: !!c.whatsappInvite, // ברירת מחדל מפרופיל הלקוחה (Phase 4 §7)
       chargeFromPackage: false,
       clientPackageId: "",
     });
@@ -197,7 +205,10 @@ export default function AppointmentForm() {
         return;
       }
 
-      if (form.sendInvite)
+      // Phase 4 §7 — ניווט אוטומטי למסך "שליחת זימון" אם התבקש זימון
+      // באימייל ו/או בוואטסאפ (שני הכפתורים מוצגים שם לפי מה שזמין ללקוחה,
+      // ראו SendInvite.jsx). ללא כל בקשת זימון — ממשיכים ליומן כרגיל.
+      if (form.sendInvite || form.sendInviteWhatsapp)
         navigate(`/appointments/${apptId}/send`, {
           replace: true,
           state: { from: isEdit ? "calendar" : "appointments" },
@@ -259,6 +270,7 @@ export default function AppointmentForm() {
                 mode: "new",
                 clientId: "",
                 sendInvite: false,
+                sendInviteWhatsapp: false,
                 chargeFromPackage: false,
                 clientPackageId: "",
               })
@@ -456,10 +468,25 @@ export default function AppointmentForm() {
         />
         <span>שליחת זימון במייל ללקוחה</span>
       </label>
+      {/* Phase 4 §7 — אפשרות זימון נפרדת בוואטסאפ, לצד האימייל. ברירת המחדל
+          נגזרת מהעדפת client.whatsappInvite (ראו pickClient) וניתנת לשינוי
+          ידני כאן, בדיוק כמו sendInvite לאימייל. */}
+      <label className="inline-check" style={{ padding: "4px 2px" }}>
+        <input
+          type="checkbox"
+          checked={form.sendInviteWhatsapp}
+          onChange={(e) => set({ sendInviteWhatsapp: e.target.checked })}
+        />
+        <span>שליחת זימון בוואטסאפ ללקוחה</span>
+      </label>
 
       <div className="save-row">
         <button className="btn" disabled={!canSave || saving} onClick={save}>
-          {saving ? "שומרת…" : form.sendInvite ? "שמירה והמשך לזימון →" : "שמירת התור"}
+          {saving
+            ? "שומרת…"
+            : form.sendInvite || form.sendInviteWhatsapp
+            ? "שמירה והמשך לזימון →"
+            : "שמירת התור"}
         </button>
       </div>
     </>

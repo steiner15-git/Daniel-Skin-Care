@@ -58,7 +58,7 @@ export default function ClientBasicFields({
         </div>
       </div>
 
-      <div className="field">
+      <div className="field" style={{ marginBottom: 8 }}>
         <label>טלפון</label>
         <input
           type="tel"
@@ -70,8 +70,18 @@ export default function ClientBasicFields({
           <p className="warn-text">⚠ מספר טלפון זה כבר קיים אצל לקוחה אחרת (ניתן להמשיך).</p>
         )}
       </div>
+      {/* Phase 4 §7 — צ'קבוקס העדפת WhatsApp ממוקם מיד מתחת לשדה הטלפון,
+          באותו דפוס בדיוק כמו צ'קבוקס האימייל מתחת לשדה האימייל למטה. */}
+      <label className="inline-check">
+        <input
+          type="checkbox"
+          checked={!!value.whatsappInvite}
+          onChange={(e) => set("whatsappInvite", e.target.checked)}
+        />
+        <span>מעוניינת לקבל זימון תור בוואטסאפ</span>
+      </label>
 
-      <div className="field" style={{ marginBottom: 8 }}>
+      <div className="field" style={{ marginBottom: 8, marginTop: 14 }}>
         <label>אימייל</label>
         <input
           type="email"
