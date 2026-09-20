@@ -11,6 +11,8 @@ import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
 import { formatDate } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
+import { clientCancellationStats } from "../../utils/cancellations";
+import { whatsappUrl } from "../../utils/invite";
 import { fullName, ageFromBirthday, normalizePhone } from "./clientUtils";
 
 const TABS = [
@@ -186,11 +188,34 @@ function DetailsTab({
     <>
       <div className="card">
         <ReadRow label="שם" value={fullName(client)} />
-        <ReadRow label="טלפון" value={client.phone || "—"} ltr sensitive />
+        {/* Phase 4 §7 — כפתור "שליחת הודעה בוואטסאפ" לצד שדה הטלפון: שיחה
+            חופשית (whatsappUrl בלי טקסט), נפרד מהזימון המובנה עם קישור-ליומן
+            שנשלח דרך מסך "שליחת זימון" (SendInvite.jsx). */}
+        <div className="read-row">
+          <span className="muted">טלפון</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span dir="ltr" className="sensitive">{client.phone || "—"}</span>
+            {client.phone && (
+              <a
+                className="btn btn--ghost btn--sm"
+                href={whatsappUrl(client.phone)}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                💬 וואטסאפ
+              </a>
+            )}
+          </span>
+        </div>
         <ReadRow label="אימייל" value={client.email || "—"} ltr sensitive />
         <ReadRow
           label="זימון במייל"
           value={client.emailInvite ? "מעוניינת" : "לא מעוניינת"}
+        />
+        <ReadRow
+          label="זימון בוואטסאפ"
+          value={client.whatsappInvite ? "מעוניינת" : "לא מעוניינת"}
         />
         <ReadRow
           label="תאריך לידה"
@@ -265,6 +290,11 @@ function AppointmentsTab({ appts, clientId }) {
     return map;
   }, [income]);
 
+  // Phase 4 §5 — מעקב ביטולים: מחושב מתוך appts הגולמי (כולל תורים
+  // מבוטלים), לפני הסינון של status!=="cancelled" למטה — אחרת אין דרך
+  // לספור אותם.
+  const cancelStats = useMemo(() => clientCancellationStats(appts, clientId), [appts, clientId]);
+
   // appts כבר מגיע מסונן לפי clientId מ-Firestore (where clientId==clientId);
   // עדיין מסננים כאן status!=="cancelled" בזיכרון — תור שבוטל ביומן נשאר
   // ברשומות (לצורך היסטוריה/דוחות) אך מסומן status:"cancelled" ואינו נמחק,
@@ -284,6 +314,14 @@ function AppointmentsTab({ appts, clientId }) {
   return (
     <>
       <PackagesSection packages={myPackages} incomeById={incomeById} />
+
+      {cancelStats.cancelledCount > 0 && (
+        <div className="notice" style={{ marginTop: 0 }}>
+          ביטולים: {cancelStats.cancelledCount} מתוך {cancelStats.totalAppointments} תורים (
+          {cancelStats.cancellationRate}%)
+          {cancelStats.noShow > 0 && ` · לא הגיעה: ${cancelStats.noShow}`}
+        </div>
+      )}
 
       <h3 className="group-title">תורים עתידיים</h3>
       {future.length === 0 ? (

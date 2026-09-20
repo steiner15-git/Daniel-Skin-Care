@@ -14,6 +14,10 @@ const impl = LOCAL ? local : firestore;
 export const IS_LOCAL = LOCAL;
 export const useSettingDoc = impl.useSettingDoc;
 export const useCollectionData = impl.useCollectionData;
+// Phase 4 §9 — קריאות מוגבלות-שנה (Calendar.jsx, AuditLog.jsx). ראו
+// data/firestore.js / data/localStore.js לפירוט המימוש בכל backend.
+export const useYearRangeCollectionData = impl.useYearRangeCollectionData;
+export const useMultiYearCollectionData = impl.useMultiYearCollectionData;
 export const useRepo = impl.useRepo;
 export const useBatchRepo = impl.useBatchRepo;
 export const useAuditLog = impl.useAuditLog;

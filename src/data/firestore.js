@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   doc,
@@ -9,6 +9,7 @@ import {
   deleteDoc,
   getDocs,
   query,
+  where,
   serverTimestamp,
   writeBatch,
 } from "firebase/firestore";
@@ -68,7 +69,8 @@ export function useSettingDoc(key) {
 // וכו' תמיד נקראים ככה, למשל BottomNav+Dashboard+Business על אותה קולקציה
 // בו-זמנית), חולקות מאזין onSnapshot אחד במקום לפתוח מנוי עצמאי כל אחת.
 // זה מפחית משמעותית קריאות Firestore על מסלולים נפוצים (בפרט BottomNav,
-// שמחובר תמיד בכל מסך ב-AppShell וצורך appointments+income).
+// שמחובר תמיד בכל מסך ב-AppShell וצורך appointments+income, וכעת גם
+// useAutoBackup.js שנרשם ל-4 הקולקציות המגובות לצורך "גיבוי חכם", Phase 4 §8).
 //
 // קריאות **עם** constraints (למשל שאילתת where ממוקדת-לקוחה ב-ClientCard)
 // אינן משתתפות במאגר המשותף — הן ממשיכות לקבל מנוי עצמאי כרגיל, כי הן
@@ -77,6 +79,10 @@ export function useSettingDoc(key) {
 // לא React state — Map מודולרי רגיל, כדי שהמאגר ישרוד בין רינדורים/
 // קומפוננטות בלי תלות ב-Context. מנוי נסגר אוטומטית כשמספר ה-subscribers
 // יורד ל-0 (כל הצרכנים עשו unmount) — אין צורך בניקוי ידני.
+//
+// Phase 4 §9: אותו Map משמש גם למנויים מוגבלי-שנה (subscribeRangeQuery
+// למטה) — מפתחות אלו כוללים סיומת שנה (${uid}:${name}:${year}) שאינה
+// מתנגשת עם מפתחות ה-collection המלא (${uid}:${name}).
 const collectionRegistry = new Map();
 
 function subscribeShared(uid, name, onUpdate) {
@@ -103,6 +109,58 @@ function subscribeShared(uid, name, onUpdate) {
   entry.subscribers.add(onUpdate);
   // סנכרון מיידי עם מה שכבר נטען (אם קומפוננטה נטענת אחרי שהמנוי כבר
   // פעיל) — כך שהיא לא ממתינה ל-snapshot הבא כדי לקבל נתונים/loading:false.
+  onUpdate(entry.items, entry.loading);
+
+  return () => {
+    entry.subscribers.delete(onUpdate);
+    if (entry.subscribers.size === 0) {
+      entry.unsub();
+      collectionRegistry.delete(key);
+    }
+  };
+}
+
+// Phase 4 §9 — מנוי חי מוגבל לשנה קלנדרית בודדת, לצרכנים שתמיד מציגים טווח
+// מוגדר-מראש (Calendar.jsx לפי השנה המוצגת, AuditLog.jsx לפי "כמה שנים
+// אחורה"). מפתח pooling נפרד (${uid}:${name}:${year}) — אם שני צרכנים
+// שואלים על אותה שנה, הם משתפים מנוי אחד, בדיוק כמו subscribeShared.
+//
+// timestampField: השדה שלפיו מגבילים הוא Firestore Timestamp (כמו
+// auditLog.ts, שנכתב עם serverTimestamp()) ולא מחרוזת ISO (כמו income.date/
+// expenses.date/appointments.start) — קובע אם גבולות הטווח נבנים כאובייקטי
+// Date או כמחרוזות "YYYY-01-01". השוואת מחרוזת עובדת נכון כאן כי כל
+// המחרוזות הקיימות בפורמט ISO קבוע-רוחב (מיון לקסיקוגרפי = מיון כרונולוגי).
+function subscribeRangeQuery(uid, name, poolSuffix, dateField, year, timestampField, onUpdate) {
+  const key = `${uid}:${name}:${poolSuffix}`;
+  let entry = collectionRegistry.get(key);
+
+  if (!entry) {
+    entry = { items: [], loading: true, subscribers: new Set() };
+    collectionRegistry.set(key, entry);
+    const startBound = timestampField ? new Date(`${year}-01-01T00:00:00`) : `${year}-01-01`;
+    const endBound = timestampField
+      ? new Date(`${year + 1}-01-01T00:00:00`)
+      : `${year + 1}-01-01`;
+    const q = query(
+      collRef(uid, name),
+      where(dateField, ">=", startBound),
+      where(dateField, "<", endBound)
+    );
+    entry.unsub = onSnapshot(
+      q,
+      (snap) => {
+        entry.items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        entry.loading = false;
+        entry.subscribers.forEach((fn) => fn(entry.items, entry.loading));
+      },
+      () => {
+        entry.loading = false;
+        entry.subscribers.forEach((fn) => fn(entry.items, entry.loading));
+      }
+    );
+  }
+
+  entry.subscribers.add(onUpdate);
   onUpdate(entry.items, entry.loading);
 
   return () => {
@@ -147,6 +205,67 @@ export function useCollectionData(name, ...constraints) {
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, name, poolable, JSON.stringify(constraints.map((c) => c?.type))]);
+
+  return { items, loading };
+}
+
+// Phase 4 §9 — קולקציה מוגבלת לשנה קלנדרית בודדת (חי, onSnapshot). לשימוש
+// כשצרכן תמיד מציג בדיוק שנה אחת בזמן נתון ומעדכן אותה כשעוברים שנה (למשל
+// Calendar.jsx לפי cursor.getFullYear()). לא מתאים לצרכן שצריך לצבור טווח
+// גדל בהדרגה — לכך ראו useMultiYearCollectionData למטה.
+export function useYearRangeCollectionData(name, dateField, year, { timestampField = false } = {}) {
+  const { user } = useAuth();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeRangeQuery(
+      user.uid,
+      name,
+      String(year),
+      dateField,
+      year,
+      timestampField,
+      (its, ld) => {
+        setItems(its);
+        setLoading(ld);
+      }
+    );
+  }, [user, name, dateField, year, timestampField]);
+
+  return { items, loading };
+}
+
+// Phase 4 §9 — איחוד של כמה שנים בו-זמנית (כל שנה = מנוי חי נפרד, ממוזג
+// לזיכרון), לצרכן עם "טען שנים קודמות" (AuditLog.jsx): years גדל בהדרגה
+// (למשל [2026] → [2026,2025] → ...), וכל שנה שנוספת מקבלת מנוי חי משלה —
+// כך שגם רשומות "ישנות" שנטענו נשארות מסונכרנות בזמן אמת כל עוד הן בטווח
+// המבוקש, ולא הופכות ל"תמונת מצב קפואה".
+export function useMultiYearCollectionData(name, dateField, years, { timestampField = false } = {}) {
+  const { user } = useAuth();
+  const [byYear, setByYear] = useState({});
+  const [loadingByYear, setLoadingByYear] = useState({});
+  const yearsKey = JSON.stringify(years);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsubs = years.map((year) =>
+      subscribeRangeQuery(user.uid, name, String(year), dateField, year, timestampField, (its, ld) => {
+        setByYear((prev) => ({ ...prev, [year]: its }));
+        setLoadingByYear((prev) => ({ ...prev, [year]: ld }));
+      })
+    );
+    return () => unsubs.forEach((u) => u());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, name, dateField, yearsKey, timestampField]);
+
+  const items = useMemo(
+    () => years.flatMap((y) => byYear[y] || []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [byYear, yearsKey]
+  );
+  const loading = years.some((y) => loadingByYear[y] !== false);
 
   return { items, loading };
 }

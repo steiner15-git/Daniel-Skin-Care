@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
-import { useCollectionData, useRepo } from "../../data";
+import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
+import { CANCEL_REASONS, CANCEL_REASON_LABELS } from "../../utils/cancellations";
 import {
   formatTime,
   formatDate,
@@ -15,13 +16,9 @@ const WEEK = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
 
 export default function Calendar() {
   const navigate = useNavigate();
-  const { items: appts, loading: la } = useCollectionData("appointments");
-  const { items: events, loading: le } = useCollectionData("events");
-  const { items: income } = useCollectionData("income");
-  const apptRepo = useRepo("appointments");
-  const eventRepo = useRepo("events");
   const confirmDialog = useConfirm();
   const toast = useToast();
+  const log = useAuditLog();
 
   const [view, setView] = useState("month");
   const [cursor, setCursor] = useState(() => {
@@ -33,6 +30,21 @@ export default function Calendar() {
   const [sortBy, setSortBy] = useState("date");
   // אירועים שנמחקו אופטימית ל-Undo (ראו ToastProvider).
   const [hiddenEventIds, setHiddenEventIds] = useState(() => new Set());
+
+  // Phase 4 §9 — appointments/income מוגבלים לשנה המוצגת כרגע ביומן
+  // (cursor), במקום טעינת כל ההיסטוריה מאז ומתמיד. מתעדכן אוטומטית כשעוברים
+  // לשנה אחרת (חצי החודש ‹/› ב-cal-nav, שיכולים לחצות שנה). income דרוש רק
+  // כדי לבדוק "שולם/לא שולם" עבור תורים שכבר מוצגים (ItemRow) — הכנסה
+  // כמעט תמיד נרשמת באותה שנה שבה נסגר התור, כך שאותו טווח מספיק.
+  // מגבלה מודעת: מעבר בין שנים ב"תצוגת רשימה" (checkbox "הצג עבר") מציג
+  // רק עבר בתוך אותה שנה קלנדרית — לא היסטוריה מלאה כמו קודם; ניווט לשנה
+  // אחרת נעשה דרך תצוגת "לוח שנה" (cal-nav), שמעדכנת את ה-cursor.
+  const year = cursor.getFullYear();
+  const { items: appts, loading: la } = useYearRangeCollectionData("appointments", "start", year);
+  const { items: events, loading: le } = useCollectionData("events");
+  const { items: income } = useYearRangeCollectionData("income", "date", year);
+  const apptRepo = useRepo("appointments");
+  const eventRepo = useRepo("events");
 
   // מיפוי מזהה-הכנסה → רשומת הכנסה, כדי לדעת אם תור שנסגר ("status: done")
   // באמת סומן כ"שולם" בפועל, ולא רק "בוצע" (אלו שני מושגים שונים — ראו ItemRow).
@@ -78,15 +90,31 @@ export default function Calendar() {
       .sort((x, y) => new Date(x.start) - new Date(y.start));
   }
 
+  // Phase 4 §5 — מעקב ביטולים: אותו מנגנון reasonOptions בדיוק כמו
+  // CloseAppointment.jsx's cancelAppt(), כדי ששתי נקודות הביטול (יומן /
+  // אישור ביצוע) יתעדו סיבה באופן זהה ויכתבו לאותו שדה cancelReason.
+  // entity.desc כולל את התווית הקריאה של הסיבה (לא רק הערך הגולמי ב-after).
   async function cancelAppt(it) {
-    const ok = await confirmDialog({
+    const reason = await confirmDialog({
       title: "ביטול תור",
       message: "לבטל את התור?",
       confirmLabel: "ביטול תור",
       danger: true,
+      reasonOptions: CANCEL_REASONS,
     });
-    if (!ok) return;
-    apptRepo.update(it.id, { status: "cancelled" });
+    if (!reason) return;
+    await apptRepo.update(it.id, { status: "cancelled", cancelReason: reason });
+    await log({
+      action: "appointment_cancel",
+      entity: {
+        type: "appointment",
+        id: it.id,
+        desc: `${it.title}${it.subtitle ? ` · ${it.subtitle}` : ""} · ${
+          CANCEL_REASON_LABELS[reason] || reason
+        }`,
+      },
+      after: { cancelReason: reason },
+    });
   }
   async function deleteEvent(it) {
     const ok = await confirmDialog({

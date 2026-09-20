@@ -5,6 +5,7 @@ import { useCollectionData, useRepo, useBatchRepo, useSettingDoc, useAuditLog } 
 import { formatDateTime, dateInputValue } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { CANCEL_REASONS, CANCEL_REASON_LABELS } from "../../utils/cancellations";
 
 export default function CloseAppointment() {
   const { id } = useParams();
@@ -152,16 +153,32 @@ export default function CloseAppointment() {
     navigate(backTo);
   }
 
+  // Phase 4 §5 — מעקב ביטולים: הדיאלוג דורש בחירת סיבה (reasonOptions),
+  // הערך שנבחר נשמר על התור כ-cancelReason, ונרשם בלוג השינויים — כולל
+  // התווית הקריאה של הסיבה (לא רק הערך הגולמי) בתוך entity.desc עצמו, כדי
+  // שהיא תופיע ישירות בשורת הלוג ולא רק בתוך "אחרי: {...}".
   async function cancelAppt() {
-    const ok = await confirmDialog({
+    const reason = await confirmDialog({
       title: "ביטול תור",
       message: "לבטל את התור? לא תיווצר הכנסה (למשל: הלקוחה לא הגיעה).",
       confirmLabel: "ביטול תור",
       danger: true,
+      reasonOptions: CANCEL_REASONS,
     });
-    if (!ok) return;
+    if (!reason) return;
     try {
-      await apptRepo.update(appt.id, { status: "cancelled" });
+      await apptRepo.update(appt.id, { status: "cancelled", cancelReason: reason });
+      await log({
+        action: "appointment_cancel",
+        entity: {
+          type: "appointment",
+          id: appt.id,
+          desc: `${appt.treatmentName || "תור"}${appt.clientName ? ` · ${appt.clientName}` : ""} · ${
+            CANCEL_REASON_LABELS[reason] || reason
+          }`,
+        },
+        after: { cancelReason: reason },
+      });
     } catch (e) {
       await confirmDialog({
         title: "שגיאה",

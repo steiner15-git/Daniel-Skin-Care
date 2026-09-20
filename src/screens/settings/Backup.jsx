@@ -29,9 +29,13 @@ export default function Backup() {
   const fileId = readFileId();
   const fileUrl = fileId ? `https://drive.google.com/file/d/${fileId}/view` : "";
 
+  // force:true — לחיצה על "גיבוי עכשיו" היא בקשה מפורשת של המשתמשת, ולכן
+  // תמיד מבצעת גיבוי בפועל מול Drive (Phase 4 §8), בניגוד לריצות
+  // האוטומטיות (useAutoBackup.js) שמדלגות בשקט כשאין שינוי updatedAt מרבי
+  // מעבר לחותמת הגיבוי האחרון.
   async function runNow() {
     setRunning(true);
-    const result = await runBackupOnce(user.uid, ensureDriveToken);
+    const result = await runBackupOnce(user.uid, ensureDriveToken, { force: true });
     setStatus(readBackupStatus());
     setRunning(false);
     if (result.ok) return;
@@ -46,7 +50,7 @@ export default function Backup() {
       if (!reconnect) return;
       await reauthorizeDrive();
       setRunning(true);
-      await runBackupOnce(user.uid, ensureDriveToken);
+      await runBackupOnce(user.uid, ensureDriveToken, { force: true });
       setStatus(readBackupStatus());
       setRunning(false);
     } else {
@@ -57,6 +61,14 @@ export default function Backup() {
       });
     }
   }
+
+  // Phase 4 §8 — "בדיקה אחרונה דילגה" מוצג רק כשהאירוע האחרון בפועל הוא
+  // דילוג (lastSkippedAt חדש יותר מ-lastSuccessAt) ואין כשל פעיל — אחרת
+  // ההודעות הקיימות (הצלחה/כישלון) כבר מספרות את הסיפור המדויק יותר.
+  const showSkipped =
+    !status.lastErrorAt &&
+    status.lastSkippedAt &&
+    (!status.lastSuccessAt || status.lastSkippedAt > status.lastSuccessAt);
 
   return (
     <>
@@ -81,6 +93,11 @@ export default function Backup() {
         ) : (
           <p className="muted" style={{ margin: 0 }}>
             טרם בוצע גיבוי.
+          </p>
+        )}
+        {showSkipped && (
+          <p className="muted" style={{ fontSize: 13, margin: "8px 0 0" }}>
+            בדיקה אחרונה ({tsToStr(status.lastSkippedAt)}): אין שינויים חדשים לגיבוי.
           </p>
         )}
       </div>

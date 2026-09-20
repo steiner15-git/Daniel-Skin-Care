@@ -1,4 +1,5 @@
 import { endDate, pad } from "./datetime";
+import { normalizePhone } from "../screens/clients/clientUtils";
 
 // חותמת זמן UTC בפורמט לוח שנה: YYYYMMDDTHHMMSSZ
 function calStamp(d) {
@@ -12,6 +13,8 @@ function calStamp(d) {
 // (Invitation.jsx), וכ"רשת ביטחון" בפועל ב-SendInvite.jsx אם מסמך ה-settings
 // מעולם לא נשמר בפועל (invitation?.body/subject הם undefined). בלי הרשת הזו,
 // מייל שנשלח לפני ביקור ראשון במסך ההגדרות היה יוצא כמעט ריק.
+// Phase 4 §7 — אותה תבנית (subject/body) משמשת גם את הודעת ה-WhatsApp
+// (ל-WhatsApp אין שדה "נושא" נפרד — רק גוף ההודעה נשלח, ראו SendInvite.jsx).
 export const DEFAULT_INVITATION_SUBJECT = "תזכורת לתור ב{שם_עסק}";
 export const DEFAULT_INVITATION_BODY =
   "שלום {שם_לקוחה},\n" +
@@ -68,4 +71,29 @@ export function mailtoUrl(to, subject, body) {
   if (body) parts.push(`body=${mailtoEncode(body)}`);
   const query = parts.length ? `?${parts.join("&")}` : "";
   return `mailto:${to || ""}${query}`;
+}
+
+// ---------- WhatsApp (Phase 4 §7) ----------
+// ממיר מספר טלפון מקומי ישראלי לפורמט בינלאומי ללא תווים מיוחדים, כפי
+// שדורש wa.me (972XXXXXXXXX). משתמש ב-normalizePhone הקיים כבר ב-clientUtils
+// (שנועד במקור להשוואת כפילויות טלפון) במקום לשכפל ניקוי-ספרות עצמאי —
+// אותה מדיניות "מספר = ספרות בלבד" בכל מקום באפליקציה. אם המספר כבר מתחיל
+// ב-972 (או בכל קידומת אחרת שאינה 0), הוא מוחזר כמות שהוא. המרה בסיסית
+// מכוונת לישראל בלבד — תואם לכך שהאפליקציה כולה מיועדת לעסק ישראלי יחיד.
+export function toWhatsappPhone(phone) {
+  const digits = normalizePhone(phone);
+  if (!digits) return "";
+  if (digits.startsWith("0")) return "972" + digits.slice(1);
+  return digits;
+}
+
+// קישור פתיחת הודעת WhatsApp (wa.me) — הלקוחה/המפעילה עדיין צריכות ללחוץ
+// "שליחה" בפועל באפליקציית WhatsApp, בדיוק כמו ה-mailto הקיים; אין שליחה
+// אוטומטית/שרת מעורב. text אופציונלי — קישור בלי טקסט (undefined) פותח שיחה
+// חופשית עם מספר הלקוחה, לשימוש בכפתור "שליחת הודעה בוואטסאפ" בכרטיסיית
+// הלקוחה (ClientCard.jsx), בנפרד מהזימון המובנה עם קישור-ליומן ב-SendInvite.jsx.
+export function whatsappUrl(phone, text) {
+  const num = toWhatsappPhone(phone);
+  const query = text ? `?${new URLSearchParams({ text }).toString()}` : "";
+  return `https://wa.me/${num}${query}`;
 }
