@@ -5,7 +5,7 @@ import BarChart from "../../components/BarChart";
 import { SkeletonRows } from "../../components/Skeleton";
 import SummaryByProduct from "./SummaryByProduct";
 import SummaryByClient from "./SummaryByClient";
-import { useCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
+import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
 import { formatILS, HEB_MONTHS } from "../../utils/money";
 import { formatDate } from "../../utils/datetime";
 import { exportYearReport } from "../../utils/exportXlsx";
@@ -17,11 +17,15 @@ import { useToast } from "../../context/ToastProvider";
 const CURRENT_YEAR = new Date().getFullYear();
 const CURRENT_MONTH = new Date().getMonth();
 
+// Phase 4 §9 (המשך) — Business() כבר לא שואב income/expenses ברמה
+// העליונה: כל טאב (SummaryTabs/IncomeTab/ExpenseTab) שואב בעצמו, רק כל עוד
+// הוא מורכב (mounted) בפועל. לפני התיקון, שני ה-useCollectionData היו
+// רצים תמיד גם כשהטאב הפעיל לא זקוק להם כלל (למשל income נטען גם כשהמסך
+// על "הוצאות") — וגם היו "נועלים" את שני הטאבים על טעינת ההיסטוריה
+// המלאה מאז ומתמיד, בלי דרך לצמצם.
 export default function Business() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") || "summary");
-  const { items: income, loading: incomeLoading } = useCollectionData("income");
-  const { items: expenses, loading: expensesLoading } = useCollectionData("expenses");
 
   return (
     <>
@@ -38,15 +42,11 @@ export default function Business() {
         </button>
       </div>
 
-      {tab === "summary" && <SummaryTabs income={income} expenses={expenses} />}
+      {tab === "summary" && <SummaryTabs />}
       {tab === "income" && (
-        <IncomeTab
-          income={income}
-          loading={incomeLoading}
-          initialMissing={params.get("filter") === "unpaid" ? "confirmation" : ""}
-        />
+        <IncomeTab initialMissing={params.get("filter") === "unpaid" ? "confirmation" : ""} />
       )}
-      {tab === "expense" && <ExpenseTab expenses={expenses} loading={expensesLoading} />}
+      {tab === "expense" && <ExpenseTab />}
     </>
   );
 }
@@ -54,8 +54,16 @@ export default function Business() {
 // תתי-טאבים של "סיכום" (addendum §3+4): כללי | לפי מוצר | לפי לקוחה.
 // "כללי" (Summary למטה) נשאר בדיוק כפי שהיה — כולל התנהגות מצב קליניקה
 // שכבר עברה שינוי עצמאי — ללא כל שינוי בגוף הפונקציה עצמה.
-function SummaryTabs({ income, expenses }) {
+//
+// Phase 4 §9 (המשך) — income/expenses המלאים (ללא הגבלת שנה) עברו לכאן
+// מ-Business() בעצמו: SummaryTabs() (בניגוד ל-Summary() עצמה) כבר שונתה
+// בעבר כדי לתווך בין הטאבים, כך שזו נקודת החיבור הנכונה לשינוי — Summary()
+// עצמה ממשיכה לקבל בדיוק את אותם income/expenses לא-מוגבלים כמו קודם,
+// ה-source שלהם רק זז שכבה אחת למעלה.
+function SummaryTabs() {
   const [sub, setSub] = useState("general");
+  const { items: income } = useCollectionData("income");
+  const { items: expenses } = useCollectionData("expenses");
   return (
     <>
       <div className="seg" style={{ marginBottom: 16 }}>
@@ -177,8 +185,32 @@ function Summary({ income, expenses }) {
   );
 }
 
+// Phase 4 §9 (המשך) — בורר "שנה ‹ N › | כל השנים" משותף ל-IncomeTab/
+// ExpenseTab. לא נעשה שימוש חוזר ב-YearMonthNav.jsx הקיים (הועבר לבדיקה):
+// הוא בנוי לצורך אחר — מתג "חודשי/שנתי" לתצוגת-צבירה בתוך שנה שכבר נטענה
+// (סיכום לפי מוצר/לקוחה) — לא לבחירת *איזו* שנה לטעון מלכתחילה מול "הכול".
+// שני הצרכים שונים מספיק כדי לא לעוות רכיב אחד לשניהם; זהו רכיב קטן וממוקד
+// חדש במקום זאת, בעיצוב עקבי (`.year-nav`/`.icon-btn`/`.chip` קיימים).
+function YearScopeNav({ year, setYear, allYears, setAllYears }) {
+  return (
+    <div className="year-nav">
+      <button className="icon-btn" disabled={allYears} onClick={() => setYear(year - 1)}>›</button>
+      <strong>{allYears ? "כל השנים" : year}</strong>
+      <button className="icon-btn" disabled={allYears} onClick={() => setYear(year + 1)}>‹</button>
+      <button
+        type="button"
+        className={"chip" + (allYears ? " chip--on" : "")}
+        style={{ marginInlineStart: 10 }}
+        onClick={() => setAllYears((v) => !v)}
+      >
+        כל השנים
+      </button>
+    </div>
+  );
+}
+
 /* ---------- הכנסות ---------- */
-function IncomeTab({ income, initialMissing = "", loading }) {
+function IncomeTab({ initialMissing = "" }) {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
@@ -198,6 +230,22 @@ function IncomeTab({ income, initialMissing = "", loading }) {
   const [to, setTo] = useState("");
   const [receipt, setReceipt] = useState(""); // "" | with | without
   const [sortBy, setSortBy] = useState("date");
+  // Phase 4 §9 (המשך) — ברירת מחדל: השנה הנוכחית בלבד (שאילתה מוגבלת, ראו
+  // useYearRangeCollectionData). "כל השנים" משחזר בדיוק את ההתנהגות
+  // הקודמת (שאילתה מלאה, ללא הגבלה) — אותו מנוי משותף שגם SummaryTabs
+  // כבר עשוי להיות מנוי עליו, ללא כפילות עלות.
+  //
+  // חריג מכוון: כשמגיעים דרך "?filter=unpaid" (למשל מ-Dashboard/BottomNav
+  // — הכנסה לא-מאומתת עשויה להיות משנה קודמת, ולא רק מהשנה הנוכחית),
+  // ברירת המחדל היא "כל השנים" ולא השנה הנוכחית — אחרת הזימון הישיר
+  // (deep-link) עלול "לאבד" בשקט את הרשומה שאותה בדיוק ביקשו למצוא.
+  const [year, setYear] = useState(CURRENT_YEAR);
+  const [allYears, setAllYears] = useState(!!initialMissing);
+  const { items: income, loading } = useYearRangeCollectionData(
+    "income",
+    "date",
+    allYears ? null : year
+  );
   // הכנסות שנמחקו אופטימית ל-Undo (רק מחיקות "פשוטות" ללא side-effects —
   // ראו remove() למטה. ראו ToastProvider).
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
@@ -339,6 +387,8 @@ function IncomeTab({ income, initialMissing = "", loading }) {
 
   return (
     <>
+      <YearScopeNav year={year} setYear={setYear} allYears={allYears} setAllYears={setAllYears} />
+
       <div className="toolbar">
         <input placeholder="חיפוש (לקוחה / טיפול / חשבונית)" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="toolbar__row">
@@ -446,7 +496,7 @@ function IncomeTab({ income, initialMissing = "", loading }) {
 }
 
 /* ---------- הוצאות ---------- */
-function ExpenseTab({ expenses, loading }) {
+function ExpenseTab() {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("expenses");
@@ -461,6 +511,16 @@ function ExpenseTab({ expenses, loading }) {
   const [to, setTo] = useState("");
   const [receipt, setReceipt] = useState(""); // "" | with | without
   const [sortBy, setSortBy] = useState("date");
+  // Phase 4 §9 (המשך) — ראו הערה מקבילה ב-IncomeTab. אין כאן deep-link
+  // "unpaid" מקביל (הוצאות אינן נזקקות לאימות תשלום), ולכן אין חריג כמו
+  // ב-IncomeTab — ברירת המחדל היא תמיד השנה הנוכחית.
+  const [year, setYear] = useState(CURRENT_YEAR);
+  const [allYears, setAllYears] = useState(false);
+  const { items: expenses, loading } = useYearRangeCollectionData(
+    "expenses",
+    "date",
+    allYears ? null : year
+  );
   // הוצאות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
@@ -518,6 +578,8 @@ function ExpenseTab({ expenses, loading }) {
 
   return (
     <>
+      <YearScopeNav year={year} setYear={setYear} allYears={allYears} setAllYears={setAllYears} />
+
       <div className="toolbar">
         <input placeholder="חיפוש (תיאור / עסק / קטגוריה)" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="toolbar__row">

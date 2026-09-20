@@ -71,11 +71,12 @@ export function useCollectionData(name) {
 
 // Phase 4 §9 — מקביל ל-useYearRangeCollectionData של firestore.js: מכיוון
 // שבמצב מקומי הכול כבר בזיכרון (localStorage), אין עלות שאילתה אמיתית —
-// פשוט מסננים בצד הלקוח לפי שנה, עם אותה חתימת פונקציה בדיוק לשמירה על
-// תאימות API בין שני ה-backends.
+// פשוט מסננים בצד הלקוח לפי שנה. year === null ⇒ "כל השנים" (ללא סינון),
+// תואם ל-Business.jsx's IncomeTab/ExpenseTab (§9 המשך).
 export function useYearRangeCollectionData(name, dateField, year) {
   useBus();
-  const items = readColl(name).filter((r) => yearOf(r[dateField]) === year);
+  const all = readColl(name);
+  const items = year == null ? all : all.filter((r) => yearOf(r[dateField]) === year);
   return { items, loading: false };
 }
 

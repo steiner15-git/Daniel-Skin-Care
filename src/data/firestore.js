@@ -66,11 +66,11 @@ export function useSettingDoc(key) {
 // כמה קומפוננטות שקוראות ל-useCollectionData(name) עבור אותה קולקציה,
 // **ללא constraints** (כלומר: "תני לי את כל האוסף, אני מסננת בזיכרון" —
 // הדפוס הדומיננטי בכל האפליקציה: appointments/income/clients/clientPackages
-// וכו' תמיד נקראים ככה, למשל BottomNav+Dashboard+Business על אותה קולקציה
-// בו-זמנית), חולקות מאזין onSnapshot אחד במקום לפתוח מנוי עצמאי כל אחת.
-// זה מפחית משמעותית קריאות Firestore על מסלולים נפוצים (בפרט BottomNav,
-// שמחובר תמיד בכל מסך ב-AppShell וצורך appointments+income, וכעת גם
-// useAutoBackup.js שנרשם ל-4 הקולקציות המגובות לצורך "גיבוי חכם", Phase 4 §8).
+// וכו' תמיד נקראים ככה, למשל BottomNav+Dashboard+SummaryTabs על אותה
+// קולקציה בו-זמנית), חולקות מאזין onSnapshot אחד במקום לפתוח מנוי עצמאי
+// כל אחת. זה מפחית משמעותית קריאות Firestore על מסלולים נפוצים (בפרט
+// BottomNav, שמחובר תמיד בכל מסך ב-AppShell וצורך appointments+income,
+// וכעת גם useAutoBackup.js שנרשם ל-4 הקולקציות המגובות, Phase 4 §8).
 //
 // קריאות **עם** constraints (למשל שאילתת where ממוקדת-לקוחה ב-ClientCard)
 // אינן משתתפות במאגר המשותף — הן ממשיכות לקבל מנוי עצמאי כרגיל, כי הן
@@ -122,8 +122,9 @@ function subscribeShared(uid, name, onUpdate) {
 
 // Phase 4 §9 — מנוי חי מוגבל לשנה קלנדרית בודדת, לצרכנים שתמיד מציגים טווח
 // מוגדר-מראש (Calendar.jsx לפי השנה המוצגת, AuditLog.jsx לפי "כמה שנים
-// אחורה"). מפתח pooling נפרד (${uid}:${name}:${year}) — אם שני צרכנים
-// שואלים על אותה שנה, הם משתפים מנוי אחד, בדיוק כמו subscribeShared.
+// אחורה", Business.jsx's IncomeTab/ExpenseTab לפי השנה הנבחרת). מפתח
+// pooling נפרד (${uid}:${name}:${year}) — אם שני צרכנים שואלים על אותה
+// שנה, הם משתפים מנוי אחד, בדיוק כמו subscribeShared.
 //
 // timestampField: השדה שלפיו מגבילים הוא Firestore Timestamp (כמו
 // auditLog.ts, שנכתב עם serverTimestamp()) ולא מחרוזת ISO (כמו income.date/
@@ -213,6 +214,13 @@ export function useCollectionData(name, ...constraints) {
 // כשצרכן תמיד מציג בדיוק שנה אחת בזמן נתון ומעדכן אותה כשעוברים שנה (למשל
 // Calendar.jsx לפי cursor.getFullYear()). לא מתאים לצרכן שצריך לצבור טווח
 // גדל בהדרגה — לכך ראו useMultiYearCollectionData למטה.
+//
+// year === null ⇒ "כל השנים": נופל בחזרה למאגר המשותף הרגיל (ללא הגבלת
+// שנה) דרך subscribeShared — אותו מנגנון בדיוק כמו useCollectionData(name)
+// הרגיל, כולל שיתוף מנוי עם כל צרכן אחר שגם קורא לקולקציה המלאה (למשל
+// SummaryTabs). נוסף ב-Business.jsx's IncomeTab/ExpenseTab (§9 המשך) כדי
+// לאפשר החלפה נקייה בין "שנה בודדת" ל"כל השנים" מקריאת-hook אחת בלבד —
+// כך שרק מנוי אחד פעיל בכל רגע נתון, לא שניים במקביל.
 export function useYearRangeCollectionData(name, dateField, year, { timestampField = false } = {}) {
   const { user } = useAuth();
   const [items, setItems] = useState([]);
@@ -220,6 +228,12 @@ export function useYearRangeCollectionData(name, dateField, year, { timestampFie
 
   useEffect(() => {
     if (!user) return;
+    if (year == null) {
+      return subscribeShared(user.uid, name, (its, ld) => {
+        setItems(its);
+        setLoading(ld);
+      });
+    }
     return subscribeRangeQuery(
       user.uid,
       name,
