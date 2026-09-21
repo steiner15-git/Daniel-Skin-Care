@@ -4,9 +4,58 @@ import { db } from "../firebase";
 const BACKUP_NAME = "daniel-skin-care-backup.xlsx";
 const XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-// מיוצא (בעבר היה פרטי) כדי שמסך "הגדרות → גיבוי" (addendum #7) יוכל לבנות
-// קישור ישיר לקובץ הגיבוי ב-Drive מתוך אותו localStorage key בדיוק.
-export const FILE_ID_KEY = "dsc:driveBackupFileId";
+const DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
+const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
+
+// מזהה קובץ הגיבוי ב-Drive נשמר ב-localStorage, ממופתח לפי uid — כך שהחלפת
+// חשבון Google על אותו דפדפן/origin לא תשתמש במזהה של חשבון אחר (ל-Drive עם
+// scope drive.file אין גישה לקבצים של חשבון/client אחר, והתוצאה 404).
+// (המפתח הישן ללא uid — "dsc:driveBackupFileId" — כבר לא נקרא; קובץ הגיבוי
+// הקיים יימצא מחדש לפי שם, ראו findExistingBackupId.)
+const FILE_ID_KEY_BASE = "dsc:driveBackupFileId";
+
+function fileIdKey(uid) {
+  return `${FILE_ID_KEY_BASE}:${uid}`;
+}
+
+// מיוצא עבור מסך "הגדרות → גיבוי" (קישור ישיר לקובץ).
+export function readBackupFileId(uid) {
+  if (!uid) return "";
+  try {
+    return localStorage.getItem(fileIdKey(uid)) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeBackupFileId(uid, id) {
+  try {
+    if (id) localStorage.setItem(fileIdKey(uid), id);
+    else localStorage.removeItem(fileIdKey(uid));
+  } catch {
+    /* localStorage לא זמין — הגיבוי הבא פשוט יחפש את הקובץ לפי שם */
+  }
+}
+
+// שגיאת גיבוי עם סטטוס HTTP והודעת Drive, כדי שהסיבה האמיתית תוצג במסך
+// הגיבוי ובקונסול (במקום הודעה כללית "בדקי את החיבור לרשת").
+export class BackupError extends Error {
+  constructor(status, detail) {
+    super(`Drive backup failed: ${status}`);
+    this.name = "BackupError";
+    this.status = status;
+    this.detail = detail || "";
+  }
+}
+
+async function readErrorDetail(res) {
+  try {
+    const json = await res.json();
+    return json?.error?.message || "";
+  } catch {
+    return "";
+  }
+}
 
 async function getAll(uid, name) {
   const snap = await getDocs(collection(db, "users", uid, name));
@@ -91,11 +140,26 @@ async function buildWorkbookBase64(uid) {
   return btoa(binary);
 }
 
-// גיבוי אוטומטי ל-Drive: מעלה חוברת Excel יחידה, ומעדכן את אותו קובץ בכל פעם
-// (ללא צבירת קבצים — לא מעמיס על מקום ב-Drive).
-export async function runBackup(uid, token) {
-  const base64 = await buildWorkbookBase64(uid);
-  const existingId = localStorage.getItem(FILE_ID_KEY);
+// מחפש קובץ גיבוי קיים לפי שם (לא בפח). עם scope drive.file החיפוש מחזיר רק
+// קבצים שהאפליקציה (אותו OAuth client) יצרה — בדיוק מה שמתאים כאן. כשל בחיפוש
+// אינו קריטי: מחזירים null והקורא יוצר קובץ חדש.
+async function findExistingBackupId(token) {
+  try {
+    const q = encodeURIComponent(`name='${BACKUP_NAME}' and trashed=false`);
+    const res = await fetch(
+      `${DRIVE_FILES}?q=${q}&orderBy=modifiedTime%20desc&pageSize=1&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.files?.[0]?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+// העלאה: PATCH לקובץ קיים (כשיש fileId), אחרת POST ליצירת קובץ חדש.
+function uploadWorkbook(token, fileId, base64) {
   const boundary = "dscbnd" + Math.random().toString(36).slice(2);
   const metadata = { name: BACKUP_NAME, mimeType: XLSX_MIME };
 
@@ -109,20 +173,49 @@ export async function runBackup(uid, token) {
     base64 +
     `\r\n--${boundary}--`;
 
-  const url = existingId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`
-    : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
+  const url = fileId
+    ? `${DRIVE_UPLOAD}/${fileId}?uploadType=multipart`
+    : `${DRIVE_UPLOAD}?uploadType=multipart`;
 
-  const res = await fetch(url, {
-    method: existingId ? "PATCH" : "POST",
+  return fetch(url, {
+    method: fileId ? "PATCH" : "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": `multipart/related; boundary=${boundary}`,
     },
     body,
   });
-  if (!res.ok) throw new Error(`Drive backup failed: ${res.status}`);
+}
+
+// גיבוי אוטומטי ל-Drive: מעלה חוברת Excel יחידה, ומעדכן את אותו קובץ בכל פעם
+// (ללא צבירת קבצים — לא מעמיס על מקום ב-Drive).
+//
+// עמידות: אם המזהה השמור כבר אינו תקף (הקובץ נמחק ב-Drive, או שייך לחשבון/
+// client אחר) — Drive מחזיר 404. במקום להיכשל לנצח (כפי שקרה כשה-PATCH לא
+// נפל חזרה ל-POST), מנקים את המזהה, מחפשים קובץ גיבוי קיים לפי שם, ואם אין —
+// יוצרים חדש.
+export async function runBackup(uid, token) {
+  const base64 = await buildWorkbookBase64(uid);
+
+  const storedId = readBackupFileId(uid) || null;
+  // אין מזהה שמור (דפדפן חדש / localStorage נוקה) — קודם מחפשים קובץ קיים
+  // כדי לא ליצור כפילות ב-Drive.
+  const initialId = storedId || (await findExistingBackupId(token));
+
+  let res = await uploadWorkbook(token, initialId, base64);
+
+  if (res.status === 404 && initialId) {
+    writeBackupFileId(uid, null);
+    const foundId = await findExistingBackupId(token);
+    res = await uploadWorkbook(token, foundId && foundId !== initialId ? foundId : null, base64);
+  }
+
+  if (!res.ok) {
+    if (res.status === 404) writeBackupFileId(uid, null);
+    throw new BackupError(res.status, await readErrorDetail(res));
+  }
+
   const json = await res.json();
-  if (json.id) localStorage.setItem(FILE_ID_KEY, json.id);
+  if (json.id) writeBackupFileId(uid, json.id);
   return json.id;
 }

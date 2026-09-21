@@ -118,6 +118,12 @@ export default function CloseAppointment() {
           data: {
             source: "appointment",
             appointmentId: appt.id,
+            // clientId נשמר כאן (בנוסף ל-clientName) — אותו דפוס כמו בהכנסות
+            // ממכירת מוצר/רכישת סדרה. בלעדיו אותה לקוחה מופיעה ב"סיכום לפי
+            // לקוחה" בשתי שורות (מפתח clientId מול מפתח name:...). לקוחה
+            // שהוזנה ידנית בתיאום תור (ללא כרטיסייה) — clientId ריק.
+            // הכנסות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId.
+            clientId: appt.clientId || null,
             clientName: appt.clientName || "",
             treatmentName: appt.treatmentName || "",
             amount: Number(amountVal) || 0,

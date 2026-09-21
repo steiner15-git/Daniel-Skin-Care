@@ -23,8 +23,9 @@ const SIX_HOURS = 6 * 60 * 60 * 1000;
 // (בלי בקשת טוקן, בלי בקשת רשת).
 //
 // מחזירה { ok: true, skipped: true } כשדילגה, { ok: true } בהצלחה, או
-// { ok: false, reason: "no-token" | "other" } בכשל, כדי שהמסך היוזם יוכל
-// להציג הודעת שגיאה מתאימה למקרה של קריאה יזומה.
+// { ok: false, reason: "no-token" | "other", detail? } בכשל, כדי שהמסך היוזם
+// יוכל להציג הודעת שגיאה מתאימה למקרה של קריאה יזומה. detail הוא הסיבה
+// האמיתית (סטטוס HTTP + הודעת Drive) — נשמרת גם בסטטוס (lastErrorReason).
 export async function runBackupOnce(uid, ensureDriveToken, { force = false, currentMax = null } = {}) {
   if (!force && currentMax != null && currentMax <= readBackupWatermark()) {
     markBackupSkipped();
@@ -35,7 +36,7 @@ export async function runBackupOnce(uid, ensureDriveToken, { force = false, curr
     // — כולל רענון שקט אם נדרש, במקום להיכשל בשקט על טוקן שכבר פג.
     const token = await ensureDriveToken();
     if (!token) {
-      markBackupError();
+      markBackupError("no-token");
       return { ok: false, reason: "no-token" };
     }
     await runBackup(uid, token);
@@ -45,9 +46,13 @@ export async function runBackupOnce(uid, ensureDriveToken, { force = false, curr
     // חלון מירוץ צר וזניח, קיים באותה מידה בכל גישה חלופית).
     writeBackupWatermark(Date.now());
     return { ok: true };
-  } catch {
-    markBackupError();
-    return { ok: false, reason: "other" };
+  } catch (e) {
+    console.error("[backup] failed", e);
+    const detail = e?.status
+      ? `HTTP ${e.status}${e.detail ? ` — ${e.detail}` : ""}`
+      : String(e?.message || e);
+    markBackupError(detail);
+    return { ok: false, reason: "other", detail };
   }
 }
 

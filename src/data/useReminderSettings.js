@@ -7,6 +7,12 @@ const DEFAULTS = {
   packageExpiryDays: 14, // עדיין לא בשימוש בפועל — נועד לפיצ'ר #12 (התראת פקיעת חבילה)
   showPendingBadge: true,
   showUnpaidBadge: true,
+  // תגמול הפניות: כל כמה הפניות שהושלמו (הלקוחה שהופנתה ביצעה לפחות תור
+  // אחד) מגיעה מתנה ללקוחה המפנה. 0 = המנגנון כבוי. ראו utils/reminders.js.
+  referralRewardThreshold: 3,
+  // באדג' מספרי על אייקון "לקוחות" בבר התחתון — מספר לקוחות זכאיות שממתינות
+  // לאישור מתנה.
+  showReferralBadge: true,
 };
 
 // מסמך הגדרות מאוחד לתזכורות (users/{uid}/settings/reminders), עם מיגרציה

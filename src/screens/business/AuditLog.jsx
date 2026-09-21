@@ -22,6 +22,7 @@ const ACTION_LABELS = {
   package_delete: "מחיקת חבילת לקוחה",
   appointment_delete: "מחיקת תור",
   appointment_cancel: "ביטול תור",
+  referral_reward_given: "אישור מתנת הפניות",
 };
 
 const CURRENT_YEAR = new Date().getFullYear();

@@ -4,7 +4,7 @@ import ScreenHeader from "../../components/ScreenHeader";
 import ClientBasicFields from "./ClientBasicFields";
 import DiagnosisForm from "./DiagnosisForm";
 import { useCollectionData, useRepo } from "../../data";
-import { normalizePhone, ageFromBirthday } from "./clientUtils";
+import { normalizePhone, ageFromBirthday, normalizeReferral } from "./clientUtils";
 
 export default function AddClient() {
   const navigate = useNavigate();
@@ -26,8 +26,10 @@ export default function AddClient() {
 
   async function save() {
     setSaving(true);
+    // normalizeReferral: רשת ביטחון — הלקוחה המפנה נשמרת רק כשמקור ההגעה
+    // הוא "המלצה" (ראו clientUtils.js).
     const id = await repo.add({
-      ...basic,
+      ...normalizeReferral(basic),
       diagnosis,
       archived: false,
     });

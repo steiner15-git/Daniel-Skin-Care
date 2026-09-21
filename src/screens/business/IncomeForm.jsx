@@ -1,10 +1,60 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
+import ClientPicker from "../../components/ClientPicker";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
 import { formatILS } from "../../utils/money";
 import { dateInputValue } from "../../utils/datetime";
 import ReceiptField from "../../components/ReceiptField";
+
+// שדה "פירוט / טיפול" להכנסה ידנית: טקסט חופשי עם הצעות מרשימת הטיפולים
+// (settings/treatments). בחירה מההצעות — או הקלדת שם זהה בדיוק לטיפול —
+// נחשבת "מהרשימה" (נשמר treatmentId); כל טקסט אחר נשמר כטקסט חופשי בלבד.
+// הרשימה מבטיחה שם עקבי, כך שהסיכום לפי טיפול לא מתפצל בגלל שגיאות כתיב.
+function TreatmentField({ value, onChange, treatments }) {
+  const [open, setOpen] = useState(false);
+  const term = value.trim();
+  const linked = treatments.find((t) => t.name === term) || null;
+  const options = treatments.filter((t) => !term || t.name.includes(term));
+  // כשהשם זהה בדיוק לטיפול — אין טעם להמשיך להציג את הרשימה.
+  const showList = open && options.length > 0 && !linked;
+
+  return (
+    <div className="field">
+      <label>פירוט / טיפול</label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setOpen(true)}
+        // השהיה קצרה, כדי שלחיצה על הצעה תספיק להירשם לפני סגירת הרשימה.
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+      />
+      {showList && (
+        <div className="suggest">
+          {options.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className="suggest__item"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onChange(t.name);
+                setOpen(false);
+              }}
+            >
+              {t.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {term && (
+        <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
+          {linked ? "✓ טיפול מהרשימה" : "לא מהרשימה — יירשם כטקסט חופשי"}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function IncomeForm() {
   const { id } = useParams();
@@ -15,8 +65,13 @@ export default function IncomeForm() {
   const log = useAuditLog();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+  const { data: treatmentsDoc } = useSettingDoc("treatments");
+  const treatments = treatmentsDoc?.items ?? [];
 
   const editing = isEdit ? items.find((r) => r.id === id) : null;
+  // הכנסה שנוצרה אוטומטית (מתור / רכישת סדרה / מכירת מוצר) — הלקוחה והשיוך
+  // שלה נקבעים במקור (התור/החבילה), ולכן הלקוחה מוצגת כאן לקריאה בלבד.
+  const isManual = !editing || !editing.source || editing.source === "manual";
 
   const [form, setForm] = useState({
     amount: "",
@@ -25,6 +80,7 @@ export default function IncomeForm() {
     paymentMethod: "",
     paid: false,
     note: "",
+    clientId: "",
     clientName: "",
     receiptData: null,
     receiptFileId: null,
@@ -42,6 +98,8 @@ export default function IncomeForm() {
         // note — לכן טוענים מ-note אם קיים, ואם לא, מ-treatmentName הקיים,
         // כדי שהשדה בפועל יציג את הערך הנוכחי ולא יופיע ריק.
         note: editing.note || editing.treatmentName || "",
+        clientId: editing.clientId || "",
+        clientName: editing.clientName || "",
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing?.id]);
@@ -51,6 +109,9 @@ export default function IncomeForm() {
   }
 
   async function save() {
+    const linkedTreatment = isManual
+      ? treatments.find((t) => t.name === form.note.trim()) || null
+      : null;
     const payload = {
       amount: Number(form.amount) || 0,
       date: form.date,
@@ -58,12 +119,17 @@ export default function IncomeForm() {
       paymentMethod: form.paymentMethod,
       paid: form.paid,
       note: form.note.trim(),
+      // clientId מקשר את ההכנסה לכרטיסיית הלקוחה (ולסיכום לפי לקוחה); ריק
+      // בלקוחה מזדמנת (שם בלבד, בלי כרטיסייה).
+      clientId: form.clientId || null,
       clientName: form.clientName.trim(),
       // תוקן: לפני כן, כאשר עורכים הכנסה שכבר יש לה treatmentName (כל הכנסה
       // אוטומטית), הביטוי היה editing?.treatmentName || form.note.trim() —
       // שמתעלם תמיד מהעריכה בפועל (כי editing.treatmentName תמיד "אמיתי").
       // כעת שדה "פירוט / טיפול" הוא מקור האמת היחיד, תמיד ניתן לעריכה.
       treatmentName: form.note.trim(),
+      // treatmentId נשמר רק להכנסה ידנית, וכשהשם תואם טיפול מהרשימה.
+      ...(isManual ? { treatmentId: linkedTreatment?.id || null } : {}),
       source: editing?.source || "manual",
       receiptData: form.receiptData || null,
       receiptFileId: form.receiptFileId || null,
@@ -131,16 +197,33 @@ export default function IncomeForm() {
           </select>
         </div>
 
-        <div className="row-2">
+        {/* לקוחה: הכנסה ידנית — בורר (לקוחה מהרשימה / מזדמנת); הכנסה אוטומטית
+            — קריאה בלבד, כי מקור האמת שלה הוא התור/החבילה. */}
+        {isManual ? (
+          <ClientPicker
+            clientId={form.clientId}
+            clientName={form.clientName}
+            onChange={({ clientId, clientName }) => set({ clientId, clientName })}
+          />
+        ) : (
+          <div className="read-row" style={{ marginBottom: 14 }}>
+            <span className="muted">לקוחה (נקבעת לפי התור/הרכישה המקורית)</span>
+            <span>{form.clientName || "—"}</span>
+          </div>
+        )}
+
+        {isManual ? (
+          <TreatmentField
+            value={form.note}
+            onChange={(v) => set({ note: v })}
+            treatments={treatments}
+          />
+        ) : (
           <div className="field">
             <label>פירוט / טיפול</label>
             <input value={form.note} onChange={(e) => set({ note: e.target.value })} />
           </div>
-          <div className="field">
-            <label>לקוחה (אופציונלי)</label>
-            <input value={form.clientName} onChange={(e) => set({ clientName: e.target.value })} />
-          </div>
-        </div>
+        )}
 
         <label className="inline-check">
           <input type="checkbox" checked={form.paid} onChange={(e) => set({ paid: e.target.checked })} />

@@ -13,6 +13,11 @@ import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
+// תאריך פקיעה במילישניות; חבילה בלי תאריך פקיעה מדורגת אחרונה.
+function expiryMs(p) {
+  return p.expiryDate ? new Date(p.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;
+}
+
 export default function AppointmentForm() {
   const { id } = useParams();
   const isEdit = !!id;
@@ -57,6 +62,10 @@ export default function AppointmentForm() {
   });
   const [clientQuery, setClientQuery] = useState("");
   const [saving, setSaving] = useState(false);
+  // האם המשתמשת שינתה ידנית את חיוב-החבילה (צ'קבוקס/בורר) עבור הבחירה הנוכחית
+  // של לקוחה+טיפול. כל עוד לא — הצ'קבוקס מסומן אוטומטית כשיש חבילה תואמת.
+  // מתאפס בכל החלפת לקוחה/טיפול (הקשר חדש → ברירת המחדל חוזרת).
+  const [pkgTouched, setPkgTouched] = useState(false);
 
   // טעינת תור קיים לעריכה
   useEffect(() => {
@@ -91,6 +100,7 @@ export default function AppointmentForm() {
   }
 
   function pickClient(c) {
+    setPkgTouched(false);
     set({
       mode: "existing",
       clientId: c.id,
@@ -105,6 +115,7 @@ export default function AppointmentForm() {
   }
 
   function pickTreatment(tid) {
+    setPkgTouched(false);
     const t = treatments.find((x) => x.id === tid);
     set({
       treatmentId: tid,
@@ -116,20 +127,43 @@ export default function AppointmentForm() {
     });
   }
 
+  // חבילות פעילות של הלקוחה שמכסות את הטיפול הנבחר. ממוינות לפי תאריך פקיעה
+  // (הקרובה ראשונה) — החבילה הראשונה היא ברירת המחדל לחיוב.
   const matchingPackages = useMemo(() => {
     if (form.mode !== "existing" || !form.clientId || !form.treatmentId) return [];
     const t0 = new Date();
     t0.setHours(0, 0, 0, 0);
-    return packages.filter(
-      (p) =>
-        p.clientId === form.clientId &&
-        ((p.treatmentIds || []).includes(form.treatmentId) ||
-          p.treatmentId === form.treatmentId) &&
-        p.status === "active" &&
-        (p.remainingSessions ?? 0) > 0 &&
-        (!p.expiryDate || new Date(p.expiryDate) >= t0)
-    );
+    return packages
+      .filter(
+        (p) =>
+          p.clientId === form.clientId &&
+          ((p.treatmentIds || []).includes(form.treatmentId) ||
+            p.treatmentId === form.treatmentId) &&
+          p.status === "active" &&
+          (p.remainingSessions ?? 0) > 0 &&
+          (!p.expiryDate || new Date(p.expiryDate) >= t0)
+      )
+      .sort((a, b) => expiryMs(a) - expiryMs(b));
   }, [packages, form.mode, form.clientId, form.treatmentId]);
+
+  // חיוב מחבילה כברירת מחדל — לתור חדש בלבד. בעריכת תור קיים לא מסמנים
+  // אוטומטית: סימון החיוב שומר price:0 ומנכה מפגש בסגירה, ולכן סימון אוטומטי
+  // היה הופך בשקט תור בתשלום לתור מחבילה. אם המשתמשת ביטלה את הסימון ידנית
+  // (pkgTouched) — לא מסמנים מחדש.
+  useEffect(() => {
+    if (isEdit || pkgTouched) return;
+    if (matchingPackages.length > 0) {
+      setForm((f) =>
+        f.chargeFromPackage && matchingPackages.some((p) => p.id === f.clientPackageId)
+          ? f
+          : { ...f, chargeFromPackage: true, clientPackageId: matchingPackages[0].id }
+      );
+    } else {
+      setForm((f) =>
+        f.chargeFromPackage ? { ...f, chargeFromPackage: false, clientPackageId: "" } : f
+      );
+    }
+  }, [matchingPackages, isEdit, pkgTouched]);
 
   const start = combine(form.date, form.time);
   const isPast = new Date(start).getTime() < Date.now();
@@ -191,29 +225,29 @@ export default function AppointmentForm() {
       status: editing?.status || "scheduled",
       clientPackageId: chargingPkg ? form.clientPackageId : null,
     };
-      let apptId = id;
-      try {
-        if (isEdit) await repo.update(id, payload);
-        else apptId = await repo.add({ ...payload, inviteSent: false });
-      } catch (e) {
-        setSaving(false);
-        await confirmDialog({
-          title: "שגיאה",
-          message: "שמירת התור נכשלה: " + (e?.message || e),
-          alertOnly: true,
-        });
-        return;
-      }
+    let apptId = id;
+    try {
+      if (isEdit) await repo.update(id, payload);
+      else apptId = await repo.add({ ...payload, inviteSent: false });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת התור נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
 
-      // Phase 4 §7 — ניווט אוטומטי למסך "שליחת זימון" אם התבקש זימון
-      // באימייל ו/או בוואטסאפ (שני הכפתורים מוצגים שם לפי מה שזמין ללקוחה,
-      // ראו SendInvite.jsx). ללא כל בקשת זימון — ממשיכים ליומן כרגיל.
-      if (form.sendInvite || form.sendInviteWhatsapp)
-        navigate(`/appointments/${apptId}/send`, {
-          replace: true,
-          state: { from: isEdit ? "calendar" : "appointments" },
-        });
-      else navigate("/calendar", { replace: true });
+    // Phase 4 §7 — ניווט אוטומטי למסך "שליחת זימון" אם התבקש זימון
+    // באימייל ו/או בוואטסאפ (שני הכפתורים מוצגים שם לפי מה שזמין ללקוחה,
+    // ראו SendInvite.jsx). ללא כל בקשת זימון — ממשיכים ליומן כרגיל.
+    if (form.sendInvite || form.sendInviteWhatsapp)
+      navigate(`/appointments/${apptId}/send`, {
+        replace: true,
+        state: { from: isEdit ? "calendar" : "appointments" },
+      });
+    else navigate("/calendar", { replace: true });
   }
 
   if (isEdit && !editing)
@@ -265,7 +299,8 @@ export default function AppointmentForm() {
           </button>
           <button
             className={"seg__btn" + (form.mode === "new" ? " on" : "")}
-            onClick={() =>
+            onClick={() => {
+              setPkgTouched(false);
               set({
                 mode: "new",
                 clientId: "",
@@ -273,8 +308,8 @@ export default function AppointmentForm() {
                 sendInviteWhatsapp: false,
                 chargeFromPackage: false,
                 clientPackageId: "",
-              })
-            }
+              });
+            }}
           >
             לקוחה חדשה
           </button>
@@ -392,21 +427,23 @@ export default function AppointmentForm() {
         </div>
       </div>
 
-      {/* חיוב מחבילה — רק אם יש חבילה פעילה תואמת */}
+      {/* חיוב מחבילה — רק אם יש חבילה פעילה תואמת. בתור חדש מסומן כברירת מחדל
+          (ראו ה-useEffect למעלה); ניתן לבטל ידנית. */}
       {matchingPackages.length > 0 && (
         <div className="card">
           <label className="inline-check">
             <input
               type="checkbox"
               checked={form.chargeFromPackage}
-              onChange={(e) =>
+              onChange={(e) => {
+                setPkgTouched(true);
                 set({
                   chargeFromPackage: e.target.checked,
                   clientPackageId: e.target.checked
                     ? form.clientPackageId || matchingPackages[0].id
                     : "",
-                })
-              }
+                });
+              }}
             />
             <span>חיוב מחבילה קיימת (לא ייווצר תשלום חדש)</span>
           </label>
@@ -415,7 +452,10 @@ export default function AppointmentForm() {
               <label>בחירת חבילה</label>
               <select
                 value={form.clientPackageId}
-                onChange={(e) => set({ clientPackageId: e.target.value })}
+                onChange={(e) => {
+                  setPkgTouched(true);
+                  set({ clientPackageId: e.target.value });
+                }}
               >
                 {matchingPackages.map((p) => (
                   <option key={p.id} value={p.id}>

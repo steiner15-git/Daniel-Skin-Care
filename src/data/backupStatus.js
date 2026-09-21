@@ -4,6 +4,10 @@
 // להציג "הגיבוי האחרון נכשל" וגם "גיבוי מוצלח אחרון" בו-זמנית, אם היה גיבוי
 // מוצלח אי-פעם לפני הכישלון הנוכחי; ו-lastSkippedAt (Phase 4 §8 — "גיבוי
 // חכם") כדי להראות שהבדיקה האוטומטית רצה ומצאה שאין מה לעדכן.
+//
+// lastErrorReason: סיבת הכשל האחרון כטקסט קצר (למשל "HTTP 404 — File not
+// found: …" או "no-token"), כדי שמסך הגיבוי יציג את הסיבה האמיתית ולא רק
+// "נכשל". מנוקה בהצלחה, יחד עם lastErrorAt.
 const STATUS_KEY = "dsc:driveBackupStatus";
 
 export function readBackupStatus() {
@@ -14,25 +18,28 @@ export function readBackupStatus() {
   }
 }
 
-// הרצה מוצלחת: מעדכנת lastSuccessAt, ומנקה lastErrorAt — כישלון ישן
-// שכבר "תוקן" ע"י ריצה מוצלחת מאוחרת יותר לא אמור להמשיך להיות מוצג
-// כ"הגיבוי האחרון נכשל" (זו כבר לא המציאות הנוכחית).
+// הרצה מוצלחת: מעדכנת lastSuccessAt, ומנקה lastErrorAt/lastErrorReason —
+// כישלון ישן שכבר "תוקן" ע"י ריצה מוצלחת מאוחרת יותר לא אמור להמשיך להיות
+// מוצג כ"הגיבוי האחרון נכשל" (זו כבר לא המציאות הנוכחית).
 export function markBackupSuccess() {
   try {
     const cur = readBackupStatus();
     localStorage.setItem(
       STATUS_KEY,
-      JSON.stringify({ ...cur, lastSuccessAt: Date.now(), lastErrorAt: null })
+      JSON.stringify({ ...cur, lastSuccessAt: Date.now(), lastErrorAt: null, lastErrorReason: null })
     );
   } catch {
     /* localStorage לא זמין — הסטטוס פשוט לא יישמר */
   }
 }
 
-export function markBackupError() {
+export function markBackupError(reason) {
   try {
     const cur = readBackupStatus();
-    localStorage.setItem(STATUS_KEY, JSON.stringify({ ...cur, lastErrorAt: Date.now() }));
+    localStorage.setItem(
+      STATUS_KEY,
+      JSON.stringify({ ...cur, lastErrorAt: Date.now(), lastErrorReason: reason || null })
+    );
   } catch {
     /* localStorage לא זמין — הסטטוס פשוט לא יישמר */
   }

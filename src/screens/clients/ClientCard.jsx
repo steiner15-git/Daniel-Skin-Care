@@ -13,7 +13,10 @@ import { formatDate } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { clientCancellationStats } from "../../utils/cancellations";
 import { whatsappUrl } from "../../utils/invite";
-import { fullName, ageFromBirthday, normalizePhone } from "./clientUtils";
+import { useReminderSettings } from "../../data/useReminderSettings";
+import { useReferralRewardApproval } from "../../data/useReferralReward";
+import { completedReferralCounts, doneClientIds, referralRewardState } from "../../utils/reminders";
+import { fullName, ageFromBirthday, normalizePhone, isReferred, normalizeReferral } from "./clientUtils";
 
 const TABS = [
   { key: "details", label: "פרטי לקוחה" },
@@ -66,10 +69,13 @@ export default function ClientCard() {
     setEditing(true);
   }
   async function confirmEdit() {
-    await repo.update(id, draft);
+    // normalizeReferral: הלקוחה המפנה נשמרת רק כשמקור ההגעה הוא "המלצה".
+    // מנקה גם הפניה "יתומה" שנשארה מלפני התיקון (ראו clientUtils.js).
+    const cleaned = normalizeReferral(draft);
+    await repo.update(id, cleaned);
     await log({
       action: "client_edit",
-      entity: { type: "client", id, desc: fullName(draft) },
+      entity: { type: "client", id, desc: fullName(cleaned) },
     });
     setEditing(false);
   }
@@ -152,14 +158,30 @@ function DetailsTab({
 }) {
   // Phase 4 §6 — "הופנתה ע״י": שם הלקוחה המפנה (אם קיים), ו"לקוחות שהופנו
   // ע״י לקוחה זו" (חיפוש הפוך: מי מצביע אליה דרך referredByClientId).
+  // הפניה נחשבת רק כשמקור ההגעה הוא "המלצה" (isReferred) — כך הפניה "יתומה"
+  // שנשארה על רשומה ישנה לא מוצגת ולא נספרת.
   const referrer = useMemo(
-    () => (client.referredByClientId ? clients.find((c) => c.id === client.referredByClientId) : null),
-    [clients, client.referredByClientId]
+    () => (isReferred(client) ? clients.find((c) => c.id === client.referredByClientId) : null),
+    [clients, client]
   );
   const referredClients = useMemo(
-    () => clients.filter((c) => c.referredByClientId === id && !c.archived),
+    () => clients.filter((c) => isReferred(c) && c.referredByClientId === id && !c.archived),
     [clients, id]
   );
+
+  // תגמול הפניות: הספירה דורשת את תורי כל הלקוחות שהופנו (לא רק של הלקוחה
+  // הזו), ולכן שולפים את כל ה-appointments. הם כבר נטענים ממילא במאגר
+  // המשותף (BottomNav), כך שאין מנוי Firestore נוסף. הקריאה חייבת להיות
+  // לפני ה-early-return של מצב העריכה (סדר hooks קבוע).
+  const { items: allAppts } = useCollectionData("appointments");
+  const { data: reminders } = useReminderSettings();
+  const approveReward = useReferralRewardApproval();
+  const doneIds = useMemo(() => doneClientIds(allAppts), [allAppts]);
+  const completedCount = useMemo(
+    () => completedReferralCounts(clients, allAppts).get(id) || 0,
+    [clients, allAppts, id]
+  );
+  const reward = referralRewardState(client, completedCount, reminders.referralRewardThreshold);
 
   if (editing) {
     return (
@@ -222,7 +244,7 @@ function DetailsTab({
           value={client.birthday ? `${client.birthday}${age != null ? ` · גיל ${age}` : ""}` : "—"}
         />
         <ReadRow label="מקור הגעה" value={client.source || "—"} />
-        {client.referredByClientId && (
+        {isReferred(client) && (
           <div className="read-row">
             <span className="muted">הופנתה ע״י</span>
             {referrer ? (
@@ -252,12 +274,38 @@ function DetailsTab({
 
       {referredClients.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 12 }}>לקוחות שהופנו ע״י לקוחה זו ({referredClients.length})</h3>
+          <h3 style={{ marginBottom: 8 }}>לקוחות שהופנו ע״י לקוחה זו ({referredClients.length})</h3>
+          <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
+            הפניות שהושלמו: {completedCount} · מתנות שניתנו: {reward.given}
+            {reminders.referralRewardThreshold > 0 &&
+              ` · סף לתגמול: ${reminders.referralRewardThreshold}`}
+          </p>
+          {reward.pending > 0 && (
+            <div
+              className="notice"
+              style={{
+                marginTop: 0,
+                marginBottom: 12,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <span>🎁 זכאית לתגמול הפניות{reward.pending > 1 ? ` (${reward.pending} מתנות)` : ""}</span>
+              <button className="btn btn--sm" onClick={() => approveReward(client)}>
+                אישור מתנה
+              </button>
+            </div>
+          )}
           <div className="list">
             {referredClients.map((c) => (
               <Link key={c.id} to={`/clients/${c.id}`} className="card list-item">
                 <div className="list-item__main">
                   <strong>{fullName(c)}</strong>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {doneIds.has(c.id) ? "השלימה טיפול · נספרת" : "טרם השלימה טיפול · לא נספרת"}
+                  </span>
                 </div>
                 <span className="nav-card__chev">‹</span>
               </Link>
@@ -311,6 +359,13 @@ function AppointmentsTab({ appts, clientId }) {
 
   const myPackages = packages.filter((p) => p.clientId === clientId);
 
+  // "תשלומים נוספים": הכנסות ידניות (IncomeForm) שמקושרות ללקוחה דרך clientId.
+  // שאר סוגי ההכנסה כבר מוצגים במקומם — תור שנסגר בתורי העבר, רכישת סדרה בפס
+  // החבילות, מכירת מוצר בטאב "מוצרים" — ולכן לא נכללים כאן.
+  const extraPayments = income
+    .filter((r) => r.source === "manual" && r.clientId === clientId)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
   return (
     <>
       <PackagesSection packages={myPackages} incomeById={incomeById} />
@@ -335,6 +390,26 @@ function AppointmentsTab({ appts, clientId }) {
         <div className="empty-state" style={{ padding: "16px" }}>אין תורי עבר.</div>
       ) : (
         <ApptList list={past} incomeById={incomeById} showStatus />
+      )}
+
+      {extraPayments.length > 0 && (
+        <>
+          <h3 className="group-title">תשלומים נוספים</h3>
+          <div className="list">
+            {extraPayments.map((r) => (
+              <div key={r.id} className="card list-item">
+                <div className="list-item__main">
+                  <strong>
+                    {r.treatmentName || r.note || "תשלום"} <PaymentBadge income={r} />
+                  </strong>
+                  <span className="muted">
+                    {formatDate(r.date)} · <span className="sensitive">{formatILS(r.amount)}</span>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </>
   );
