@@ -10,6 +10,7 @@ import {
   inactiveClients,
   expiringPackages,
   lowStockProducts,
+  referralRewards,
 } from "../utils/reminders";
 import { formatTime, formatDate, sameDay } from "../utils/datetime";
 import { fullName, ageFromBirthday } from "./clients/clientUtils";
@@ -110,6 +111,13 @@ export default function Dashboard() {
   // המוצרים עצמו, ריכוז ב-utils/reminders.js כדי לא לשכפל.
   const lowStock = useMemo(() => lowStockProducts(products), [products]);
 
+  // לקוחות מפנות שזכאיות לתגמול הפניות וממתינות לאישור מתנה — לוגיקה
+  // משותפת עם הבאדג' על אייקון "לקוחות" (BottomNav). ההתראה נשארת עד לאישור.
+  const referralPending = useMemo(
+    () => referralRewards(clients, appts, reminders.referralRewardThreshold),
+    [clients, appts, reminders.referralRewardThreshold]
+  );
+
   return (
     <>
       <ScreenHeader title="בית" logo={business?.logoData} action={<GearButton />} />
@@ -170,7 +178,8 @@ export default function Dashboard() {
         unpaid.length > 0 ||
         inactive.length > 0 ||
         expiring.length > 0 ||
-        lowStock.length > 0) && (
+        lowStock.length > 0 ||
+        referralPending.length > 0) && (
         <>
           <h3 className="group-title">תזכורות</h3>
           <div className="card reminders">
@@ -210,6 +219,14 @@ export default function Dashboard() {
                 onClick={() => navigate("/products")}
               >
                 🧴 {lowStock.length} מוצרים במלאי נמוך או שאזלו →
+              </button>
+            )}
+            {referralPending.length > 0 && (
+              <button
+                className="reminder reminder--link"
+                onClick={() => navigate("/clients?filter=referral")}
+              >
+                🎁 {referralPending.length} לקוחות זכאיות לתגמול הפניות →
               </button>
             )}
           </div>

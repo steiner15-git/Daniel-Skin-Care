@@ -1,7 +1,8 @@
+import { useMemo } from "react";
 import { NavLink } from "react-router-dom";
 import { useCollectionData } from "../data";
 import { useReminderSettings } from "../data/useReminderSettings";
-import { pendingClosureAppts, unverifiedIncome } from "../utils/reminders";
+import { pendingClosureAppts, unverifiedIncome, referralRewards } from "../utils/reminders";
 
 const ICONS = {
   home: (
@@ -49,25 +50,36 @@ const ICONS = {
 // badgeKey מציין אילו פריטים מקבלים באדג' מספרי (addendum #10):
 //   calendar → תורים "ממתינים לסגירה" (אותה לוגיקה כמו מסך הבית)
 //   business → הכנסות "לא-מאומתות" שעברו את סף ימי אימות התשלום
+//   referral (לקוחות) → לקוחות מפנות זכאיות לתגמול, עד לאישור מתנה
+//     (הרחבה מעבר ל-PRD המקורי, שבו יש באדג'ים רק ליומן ולניהול עסק)
 const ITEMS = [
   { to: "/", label: "בית", icon: "home", end: true },
   { to: "/appointments", label: "תיאום תור", icon: "book" },
   { to: "/calendar", label: "יומן", icon: "calendar", badgeKey: "pending" },
-  { to: "/clients", label: "לקוחות", icon: "users" },
+  { to: "/clients", label: "לקוחות", icon: "users", badgeKey: "referral" },
   { to: "/business", label: "ניהול עסק", icon: "chart", badgeKey: "unpaid" },
 ];
 
 export default function BottomNav() {
   const { items: appts } = useCollectionData("appointments");
   const { items: income } = useCollectionData("income");
+  // clients משתתף במאגר המשותף (subscribeShared) — אין מנוי Firestore נוסף.
+  const { items: clients } = useCollectionData("clients");
   const { data: reminders } = useReminderSettings();
 
   const pendingCount = reminders.showPendingBadge ? pendingClosureAppts(appts).length : 0;
   const unpaidCount = reminders.showUnpaidBadge
     ? unverifiedIncome(income, reminders.paymentVerificationDays).length
     : 0;
+  const referralCount = useMemo(
+    () =>
+      reminders.showReferralBadge
+        ? referralRewards(clients, appts, reminders.referralRewardThreshold).length
+        : 0,
+    [clients, appts, reminders.showReferralBadge, reminders.referralRewardThreshold]
+  );
 
-  const counts = { pending: pendingCount, unpaid: unpaidCount };
+  const counts = { pending: pendingCount, unpaid: unpaidCount, referral: referralCount };
 
   return (
     <nav className="bottom-nav">

@@ -60,6 +60,23 @@ export default function Reminders() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label>מספר הפניות שהושלמו עד תגמול ללקוחה המפנה (0 = כבוי)</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={form.referralRewardThreshold}
+            onChange={(e) => set({ referralRewardThreshold: Number(e.target.value) || 0 })}
+          />
+        </div>
+        <p className="muted" style={{ fontSize: 13, margin: "8px 0 0" }}>
+          הפניה נספרת רק אם הלקוחה שהופנתה השלימה לפחות תור אחד שבוצע (ורק
+          כשמקור ההגעה שלה הוא "המלצה"). על כל כמה הפניות כאלה תוצג התראה
+          במסך הבית עד שתאשרי שהמתנה ניתנה.
+        </p>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <h3 style={{ fontSize: 16, marginBottom: 12 }}>באדג'ים בבר הניווט התחתון</h3>
         <label className="inline-check" style={{ marginBottom: 12 }}>
           <input
@@ -69,13 +86,21 @@ export default function Reminders() {
           />
           <span>הצגת מספר תורים "ממתינים לסגירה" על אייקון היומן</span>
         </label>
-        <label className="inline-check">
+        <label className="inline-check" style={{ marginBottom: 12 }}>
           <input
             type="checkbox"
             checked={!!form.showUnpaidBadge}
             onChange={(e) => set({ showUnpaidBadge: e.target.checked })}
           />
           <span>הצגת מספר הכנסות "לא-מאומתות" על אייקון ניהול העסק</span>
+        </label>
+        <label className="inline-check">
+          <input
+            type="checkbox"
+            checked={!!form.showReferralBadge}
+            onChange={(e) => set({ showReferralBadge: e.target.checked })}
+          />
+          <span>הצגת מספר לקוחות זכאיות לתגמול הפניות על אייקון הלקוחות</span>
         </label>
       </div>
 

@@ -3,21 +3,25 @@ import SettingsSubHeader from "./SettingsSubHeader";
 import { useAuth } from "../../auth/AuthProvider";
 import { IS_LOCAL } from "../../data";
 import { runBackupOnce } from "../../data/useAutoBackup";
-import { FILE_ID_KEY } from "../../data/backup";
+import { readBackupFileId } from "../../data/backup";
 import { readBackupStatus } from "../../data/backupStatus";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
+
+// אמולטור (VITE_DEV_USER=1 יחד עם VITE_USE_EMULATOR=1): IS_LOCAL כבוי, אבל
+// אין התחברות אמיתית ל-Google ולכן אין טוקן Drive — הגיבוי לא יכול לעבוד שם.
+const EMULATOR_MODE = import.meta.env.VITE_DEV_USER === "1" && !IS_LOCAL;
 
 function tsToStr(ts) {
   if (!ts) return "";
   return new Date(ts).toLocaleString("he-IL");
 }
 
-function readFileId() {
-  try {
-    return localStorage.getItem(FILE_ID_KEY) || "";
-  } catch {
-    return "";
-  }
+// סיבת הכשל כטקסט להצגה: "no-token" מתורגם, כל השאר (HTTP + הודעת Drive)
+// מוצג כפי שנשמר.
+function reasonText(reason) {
+  if (!reason) return "";
+  if (reason === "no-token") return "החיבור ל-Google Drive פג — נדרשת התחברות מחדש.";
+  return reason;
 }
 
 export default function Backup() {
@@ -26,7 +30,7 @@ export default function Backup() {
   const [status, setStatus] = useState(() => readBackupStatus());
   const [running, setRunning] = useState(false);
 
-  const fileId = readFileId();
+  const fileId = readBackupFileId(user?.uid);
   const fileUrl = fileId ? `https://drive.google.com/file/d/${fileId}/view` : "";
 
   // force:true — לחיצה על "גיבוי עכשיו" היא בקשה מפורשת של המשתמשת, ולכן
@@ -50,13 +54,20 @@ export default function Backup() {
       if (!reconnect) return;
       await reauthorizeDrive();
       setRunning(true);
-      await runBackupOnce(user.uid, ensureDriveToken, { force: true });
+      const retry = await runBackupOnce(user.uid, ensureDriveToken, { force: true });
       setStatus(readBackupStatus());
       setRunning(false);
+      if (!retry.ok && retry.reason === "other") {
+        await confirmDialog({
+          title: "הגיבוי נכשל",
+          message: `הגיבוי נכשל.\n${retry.detail || ""}`,
+          alertOnly: true,
+        });
+      }
     } else {
       await confirmDialog({
         title: "הגיבוי נכשל",
-        message: "הגיבוי נכשל. בדקי את החיבור לרשת ונסי שוב מאוחר יותר.",
+        message: `הגיבוי נכשל.\n${result.detail || "בדקי את החיבור לרשת ונסי שוב מאוחר יותר."}`,
         alertOnly: true,
       });
     }
@@ -80,8 +91,17 @@ export default function Backup() {
             <p className="warn-text" style={{ marginTop: 0 }}>
               ⚠ הגיבוי האחרון נכשל ({tsToStr(status.lastErrorAt)})
             </p>
+            {status.lastErrorReason && (
+              <p
+                className="muted"
+                dir={status.lastErrorReason === "no-token" ? undefined : "ltr"}
+                style={{ fontSize: 12, margin: "8px 0 0", wordBreak: "break-word" }}
+              >
+                {reasonText(status.lastErrorReason)}
+              </p>
+            )}
             {status.lastSuccessAt && (
-              <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+              <p className="muted" style={{ fontSize: 13, margin: "8px 0 0" }}>
                 גיבוי מוצלח אחרון: {tsToStr(status.lastSuccessAt)}
               </p>
             )}
@@ -105,6 +125,11 @@ export default function Backup() {
       {IS_LOCAL ? (
         <div className="notice" style={{ marginTop: 16 }}>
           הגיבוי האוטומטי לא פעיל במצב תצוגה מקומי.
+        </div>
+      ) : EMULATOR_MODE ? (
+        <div className="notice" style={{ marginTop: 16 }}>
+          גיבוי ל-Drive אינו זמין במצב אמולטור — אין שם התחברות אמיתית ל-Google ולכן אין
+          טוקן Drive. יש לבדוק גיבוי מול Firebase אמיתי.
         </div>
       ) : (
         <div className="save-row" style={{ justifyContent: "flex-start", marginTop: 16 }}>

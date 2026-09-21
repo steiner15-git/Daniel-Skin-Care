@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import DateField from "../../components/DateField";
-import { fullName } from "./clientUtils";
+import { fullName, REFERRAL_SOURCE } from "./clientUtils";
 
 const SOURCES = ["המלצה", "אינסטגרם", "פייסבוק", "גוגל", "פרסום ממומן", "פלאייר", "לקוחה חוזרת", "רשת חברתית אחרת", "אחר"];
 
-// Phase 4 §6: כאשר מקור ההגעה הוא "המלצה", מוצג שדה נוסף לבחירת הלקוחה
-// המפנה מתוך המאגר — מרחיב את שדה ה-source הטקסטואלי הקיים לקישור קונקרטי
-// בין שתי רשומות לקוחה (client.referredByClientId).
-const REFERRAL_SOURCE = "המלצה";
+// Phase 4 §6: כאשר מקור ההגעה הוא "המלצה" (REFERRAL_SOURCE, מוגדר ב-
+// clientUtils.js), מוצג שדה נוסף לבחירת הלקוחה המפנה מתוך המאגר — מרחיב את
+// שדה ה-source הטקסטואלי הקיים לקישור קונקרטי בין שתי רשומות לקוחה
+// (client.referredByClientId).
 
 // שדות פרטים בסיסיים (שלב 1). רכיב מבוקר — משמש בהוספה ובעריכה.
 // clients: רשימת הלקוחות המלאה, לצורך חיפוש הלקוחה המפנה (Phase 4 §6).
@@ -26,6 +26,17 @@ export default function ClientBasicFields({
   // מצב חיפוש הלקוחה המפנה — שדה UI זמני בלבד, לא נשמר על הרשומה עצמה
   // (הערך הנשמר הוא רק referredByClientId שנבחר).
   const [referralQuery, setReferralQuery] = useState("");
+
+  // שינוי מקור ההגעה. מעבר מ"המלצה" למקור אחר מאפס את הלקוחה המפנה (ואת
+  // שדה החיפוש שלה) באותה פעולה — כך שלא נשארת הפניה ללא מקור "המלצה".
+  function setSource(next) {
+    if (next !== REFERRAL_SOURCE) {
+      onChange({ ...value, source: next, referredByClientId: "" });
+      setReferralQuery("");
+    } else {
+      onChange({ ...value, source: next });
+    }
+  }
 
   const referredClient = useMemo(
     () => clients.find((c) => c.id === value.referredByClientId) || null,
@@ -107,7 +118,7 @@ export default function ClientBasicFields({
         </div>
         <div className="field">
           <label>מקור הגעה</label>
-          <select value={value.source || ""} onChange={(e) => set("source", e.target.value)}>
+          <select value={value.source || ""} onChange={(e) => setSource(e.target.value)}>
             <option value="">— בחרי —</option>
             {SOURCES.map((s) => (
               <option key={s} value={s}>
