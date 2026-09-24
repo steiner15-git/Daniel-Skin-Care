@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useReminderSettings } from "../../data/useReminderSettings";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 export default function Reminders() {
   const { data, loading, save } = useReminderSettings();
+  const confirmDialog = useConfirm();
   const [form, setForm] = useState(data);
   const [saved, setSaved] = useState(false);
 
@@ -16,9 +18,18 @@ export default function Reminders() {
     setSaved(false);
   }
 
+  // תוקן QA (2026-09): נוסף try/catch.
   async function onSave() {
-    await save(form);
-    setSaved(true);
+    try {
+      await save(form);
+      setSaved(true);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת הגדרות התזכורות נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -33,6 +44,7 @@ export default function Reminders() {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={form.paymentVerificationDays}
             onChange={(e) => set({ paymentVerificationDays: Number(e.target.value) || 0 })}
           />
@@ -49,6 +61,7 @@ export default function Reminders() {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={form.inactiveClientMonths}
             onChange={(e) => set({ inactiveClientMonths: Number(e.target.value) || 0 })}
           />
@@ -65,6 +78,7 @@ export default function Reminders() {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={form.referralRewardThreshold}
             onChange={(e) => set({ referralRewardThreshold: Number(e.target.value) || 0 })}
           />

@@ -80,7 +80,8 @@ export default function SeriesPurchase() {
             clientId: clientId || null,
             clientName,
             treatmentName: s.name,
-            amount: Number(amountVal) || 0,
+            // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0.
+            amount: Math.max(0, Number(amountVal) || 0),
             date,
             invoiceNumber: "",
             paymentMethod,
@@ -210,6 +211,7 @@ export default function SeriesPurchase() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={amountVal}
               onChange={(e) => setAmount(e.target.value)}
             />

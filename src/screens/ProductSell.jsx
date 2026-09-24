@@ -82,7 +82,8 @@ export default function ProductSell() {
             clientName,
             treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
             note: "מכירת מוצר",
-            amount: Number(amountVal) || 0,
+            // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0.
+            amount: Math.max(0, Number(amountVal) || 0),
             date,
             invoiceNumber: "",
             paymentMethod,
@@ -214,6 +215,7 @@ export default function ProductSell() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={amountVal}
               onChange={(e) => setAmount(e.target.value)}
             />

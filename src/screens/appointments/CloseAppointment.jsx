@@ -43,6 +43,11 @@ export default function CloseAppointment() {
   const amountVal = amount == null ? appt.price ?? 0 : amount;
 
   const pkg = appt.clientPackageId ? packages.find((p) => p.id === appt.clientPackageId) : null;
+  // תוקן QA (2026-09): הבחנה בין "החבילה נמחקה" (pkg === undefined, למרות
+  // ש-clientPackageId עדיין מוגדר על התור) לבין "נמצאה אך לא כשירה" (פקעה/
+  // נוצלה). לפני התיקון שתי האפשרויות הוצגו תחת אותה הודעה ("פקעה או שנגמרו
+  // בה המפגשים") — מטעה כאשר החבילה בפועל נמחקה (למשל דרך "מחיקת חבילה" ב-
+  // כרטיסיית הלקוחה) ולא פקעה כלל.
   const t0 = new Date();
   t0.setHours(0, 0, 0, 0);
   const pkgChargeable =
@@ -50,6 +55,7 @@ export default function CloseAppointment() {
     pkg.status === "active" &&
     (pkg.remainingSessions ?? 0) > 0 &&
     (!pkg.expiryDate || new Date(pkg.expiryDate) >= t0);
+  const pkgWasDeleted = !!appt.clientPackageId && !pkg;
 
   // Phase 4 §2 — אטומיות: לפני התיקון, ניכוי המפגש מהחבילה (clientPackages)
   // וסימון התור כ-"done" היו שתי כתיבות repo נפרדות. כשל רשת בין השתיים
@@ -126,7 +132,8 @@ export default function CloseAppointment() {
             clientId: appt.clientId || null,
             clientName: appt.clientName || "",
             treatmentName: appt.treatmentName || "",
-            amount: Number(amountVal) || 0,
+            // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0.
+            amount: Math.max(0, Number(amountVal) || 0),
             date,
             invoiceNumber: "",
             paymentMethod,
@@ -141,7 +148,7 @@ export default function CloseAppointment() {
             status: "done",
             incomeId,
             paymentMethod,
-            // החבילה פקעה/נגמרה — התור חויב רגיל, מנתקים את הקישור לחבילה
+            // החבילה פקעה/נגמרה/נמחקה — התור חויב רגיל, מנתקים את הקישור לחבילה
             clientPackageId: null,
             chargedFromPackage: false,
           },
@@ -242,7 +249,9 @@ export default function CloseAppointment() {
         <>
           {appt.clientPackageId && (
             <div className="notice" style={{ marginTop: 0 }}>
-              ⚠ החבילה שסומנה לתור פקעה או שנגמרו בה המפגשים — התור יחויב כתשלום רגיל.
+              {pkgWasDeleted
+                ? "⚠ החבילה שהתור היה משויך אליה נמחקה מכרטיסיית הלקוחה — התור יחויב כתשלום רגיל."
+                : "⚠ החבילה שסומנה לתור פקעה או שנגמרו בה המפגשים — התור יחויב כתשלום רגיל."}
             </div>
           )}
 
@@ -253,6 +262,7 @@ export default function CloseAppointment() {
                 <input
                   type="number"
                   inputMode="numeric"
+                  min="0"
                   value={amountVal}
                   onChange={(e) => setAmount(e.target.value)}
                 />

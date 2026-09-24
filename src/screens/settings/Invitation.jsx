@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { DEFAULT_INVITATION_SUBJECT, DEFAULT_INVITATION_BODY } from "../../utils/invite";
 
 const FIELDS = [
@@ -19,6 +20,7 @@ const DEFAULT = {
 
 export default function Invitation() {
   const { data, loading, save } = useSettingDoc("invitation");
+  const confirmDialog = useConfirm();
   const [form, setForm] = useState(DEFAULT);
   const [saved, setSaved] = useState(false);
   const bodyRef = useRef(null);
@@ -36,9 +38,18 @@ export default function Invitation() {
     setSaved(false);
   }
 
+  // תוקן QA (2026-09): נוסף try/catch.
   async function onSave() {
-    await save(form);
-    setSaved(true);
+    try {
+      await save(form);
+      setSaved(true);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת תוכן הזימון נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   if (loading) return <p className="muted">טוען…</p>;

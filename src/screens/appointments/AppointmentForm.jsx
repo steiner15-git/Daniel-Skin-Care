@@ -218,7 +218,8 @@ export default function AppointmentForm() {
       email: form.email,
       treatmentId: form.treatmentId,
       treatmentName: form.treatmentName,
-      price: chargingPkg ? 0 : Number(form.price) || 0,
+      // תוקן QA (2026-09): מחיר שלילי (הקלדה בטעות) נעצר ב-0.
+      price: chargingPkg ? 0 : Math.max(0, Number(form.price) || 0),
       start,
       durationMin: Number(form.durationMin) || 0,
       sendInvite: form.sendInvite,
@@ -421,6 +422,7 @@ export default function AppointmentForm() {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={form.price}
             onChange={(e) => set({ price: e.target.value })}
           />

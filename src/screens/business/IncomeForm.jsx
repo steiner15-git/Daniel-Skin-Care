@@ -113,7 +113,10 @@ export default function IncomeForm() {
       ? treatments.find((t) => t.name === form.note.trim()) || null
       : null;
     const payload = {
-      amount: Number(form.amount) || 0,
+      // תוקן QA (2026-09): הקלדה בטעות של סימן שלילי (נפוץ במיוחד במקלדת
+      // מספרים במובייל) הייתה נשמרת כמות שהיא ומעוותת את סיכומי ההכנסות/
+      // הרווח וייצוא ה-Excel, בלי שום אינדיקציה לטעות. הסכום נעצר עתה ב-0.
+      amount: Math.max(0, Number(form.amount) || 0),
       date: form.date,
       invoiceNumber: form.invoiceNumber.trim(),
       paymentMethod: form.paymentMethod,
@@ -167,6 +170,7 @@ export default function IncomeForm() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={form.amount}
               onChange={(e) => set({ amount: e.target.value })}
             />

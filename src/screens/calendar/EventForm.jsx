@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import TimeField from "../../components/TimeField";
 import { useCollectionData, useRepo } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { combine, formatTime, dateInputValue } from "../../utils/datetime";
 
 function minutesBetween(startTime, endTime) {
@@ -17,6 +18,7 @@ export default function EventForm() {
   const navigate = useNavigate();
   const { items: events } = useCollectionData("events");
   const repo = useRepo("events");
+  const confirmDialog = useConfirm();
   const editing = isEdit ? events.find((e) => e.id === id) : null;
 
   const [form, setForm] = useState({
@@ -26,6 +28,7 @@ export default function EventForm() {
     endTime: "11:00",
     note: "",
   });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!editing) return;
@@ -50,16 +53,28 @@ export default function EventForm() {
   const duration = minutesBetween(form.startTime, form.endTime);
   const invalidRange = duration <= 0;
 
+  // תוקן QA (2026-09): נוסף try/catch, באותו דפוס כמו שאר מסכי ה"אישור"
+  // ביישום (§4.7.1) — לפני התיקון כשל רשת/Firestore היה נכשל בשקט לגמרי.
   async function save() {
+    setSaving(true);
     const payload = {
       title: form.title.trim(),
       start: combine(form.date, form.startTime),
       durationMin: duration,
       note: form.note.trim(),
     };
-    if (isEdit) await repo.update(id, payload);
-    else await repo.add(payload);
-    navigate("/calendar", { replace: true });
+    try {
+      if (isEdit) await repo.update(id, payload);
+      else await repo.add(payload);
+      navigate("/calendar", { replace: true });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת האירוע נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   return (
@@ -108,8 +123,8 @@ export default function EventForm() {
       </div>
 
       <div className="save-row">
-        <button className="btn" disabled={!form.title.trim() || invalidRange} onClick={save}>
-          {isEdit ? "אישור שמירה" : "הוספת אירוע"}
+        <button className="btn" disabled={!form.title.trim() || invalidRange || saving} onClick={save}>
+          {saving ? "שומרת…" : isEdit ? "אישור שמירה" : "הוספת אירוע"}
         </button>
       </div>
     </>

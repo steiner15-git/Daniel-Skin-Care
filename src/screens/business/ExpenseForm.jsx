@@ -58,9 +58,12 @@ export default function ExpenseForm() {
       description: form.description.trim(),
       businessName: form.businessName.trim(),
       invoiceNumber: form.invoiceNumber.trim(),
-      amountBeforeVat: Number(form.amountBeforeVat) || 0,
-      vat: Number(form.vat) || 0,
-      total: Number(form.total) || 0,
+      // תוקן QA (2026-09): שלושת השדות הכספיים נעצרים ב-0 — הקלדה בטעות של
+      // סימן שלילי (למשל דרך מקלדת מספרים במובייל) לא אמורה לעוות את
+      // סיכום ההוצאות, "רווח" בטאב הסיכום, וייצוא ה-Excel השנתי.
+      amountBeforeVat: Math.max(0, Number(form.amountBeforeVat) || 0),
+      vat: Math.max(0, Number(form.vat) || 0),
+      total: Math.max(0, Number(form.total) || 0),
       category: form.category,
       recurring: form.recurring || null,
       receiptData: form.receiptData || null,
@@ -117,6 +120,7 @@ export default function ExpenseForm() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={form.amountBeforeVat}
               onChange={(e) => set({ amountBeforeVat: e.target.value })}
             />
@@ -126,6 +130,7 @@ export default function ExpenseForm() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={form.vat}
               onChange={(e) => set({ vat: e.target.value })}
             />
@@ -136,6 +141,7 @@ export default function ExpenseForm() {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={form.total}
             onChange={(e) => {
               setAutoTotal(false);

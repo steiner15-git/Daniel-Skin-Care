@@ -30,8 +30,21 @@ export default function NameListEditor({
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const list = fullList.filter((x) => !hiddenIds.has(x.id));
 
-  function persist(next) {
-    save({ items: next });
+  // תוקן QA (2026-09): persist() משותף להוספה/עריכה/מחיקה — נוסף try/catch
+  // כדי שכשל Firestore יוצג כהודעת שגיאה במקום להיכשל בשקט. מחיקה (הקריאה
+  // מ-onExpire של ה-Undo) לא מציגה שגיאה על גבי מסך שכבר "עבר הלאה" —
+  // ה-console.error נשאר לצורכי דיבוג, וה-UI כבר הציג את הפריט כנמחק.
+  async function persist(next) {
+    try {
+      await save({ items: next });
+    } catch (e) {
+      console.error("[NameListEditor] save failed", e);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "השמירה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
   function add() {
     if (!draft.trim()) return;

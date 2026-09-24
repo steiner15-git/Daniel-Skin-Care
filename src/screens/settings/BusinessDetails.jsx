@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
 import { resizeImage } from "../../data/photos";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 const EMPTY = { name: "", email: "", address: "", phone: "", logoData: "" };
 
 export default function BusinessDetails() {
   const { data, loading, save } = useSettingDoc("business");
+  const confirmDialog = useConfirm();
   const [form, setForm] = useState(EMPTY);
   const [saved, setSaved] = useState(false);
   const [logoErr, setLogoErr] = useState("");
@@ -23,11 +25,22 @@ export default function BusinessDetails() {
 
   // הלוגו נשמר מיד בעת ההעלאה/הסרה (בלי להמתין לכפתור "שמירה"), כדי שיופיע
   // בכל המסכים ובמטמון ההתחברות מיד.
+  // תוקן QA (2026-09): נוסף try/catch — כשל Firestore בעת שמירת הלוגו היה
+  // נכשל בשקט (form כבר עודכן ב-state לפני ה-await, כך שהתצוגה נראית
+  // תקינה גם אם השמירה בפועל נכשלה).
   async function persistLogo(logoData) {
     const next = { ...form, logoData };
     setForm(next);
-    await save(next);
-    setSaved(true);
+    try {
+      await save(next);
+      setSaved(true);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת הלוגו נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   async function onLogoPick(e) {
@@ -45,9 +58,18 @@ export default function BusinessDetails() {
     }
   }
 
+  // תוקן QA (2026-09): נוסף try/catch.
   async function onSave() {
-    await save(form);
-    setSaved(true);
+    try {
+      await save(form);
+      setSaved(true);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת פרטי העסק נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   if (loading) return <p className="muted">טוען…</p>;

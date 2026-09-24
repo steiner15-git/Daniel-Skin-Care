@@ -21,8 +21,19 @@ export default function Treatments() {
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const items = fullItems.filter((t) => !hiddenIds.has(t.id));
 
-  function persist(next) {
-    save({ items: next });
+  // תוקן QA (2026-09): persist() משותף להוספה/עריכה/מחיקה — נוסף try/catch
+  // כדי שכשל Firestore יוצג כהודעת שגיאה במקום להיכשל בשקט.
+  async function persist(next) {
+    try {
+      await save({ items: next });
+    } catch (e) {
+      console.error("[Treatments] save failed", e);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "השמירה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   function addTreatment() {
@@ -32,8 +43,9 @@ export default function Treatments() {
       {
         id: newId(),
         name: draft.name.trim(),
-        durationMin: Number(draft.durationMin) || 0,
-        price: Number(draft.price) || 0,
+        // תוקן QA (2026-09): משך/מחיר שליליים (הקלדה בטעות) נעצרים ב-0.
+        durationMin: Math.max(0, Number(draft.durationMin) || 0),
+        price: Math.max(0, Number(draft.price) || 0),
       },
     ]);
     setDraft({ name: "", durationMin: "", price: "" });
@@ -50,8 +62,8 @@ export default function Treatments() {
           ? {
               ...t,
               name: editDraft.name.trim(),
-              durationMin: Number(editDraft.durationMin) || 0,
-              price: Number(editDraft.price) || 0,
+              durationMin: Math.max(0, Number(editDraft.durationMin) || 0),
+              price: Math.max(0, Number(editDraft.price) || 0),
             }
           : t
       )
@@ -109,6 +121,7 @@ export default function Treatments() {
                   <input
                     type="number"
                     inputMode="numeric"
+                    min="0"
                     value={editDraft.durationMin}
                     onChange={(e) =>
                       setEditDraft({ ...editDraft, durationMin: e.target.value })
@@ -120,6 +133,7 @@ export default function Treatments() {
                   <input
                     type="number"
                     inputMode="numeric"
+                    min="0"
                     value={editDraft.price}
                     onChange={(e) =>
                       setEditDraft({ ...editDraft, price: e.target.value })
@@ -173,6 +187,7 @@ export default function Treatments() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={draft.durationMin}
               onChange={(e) => setDraft({ ...draft, durationMin: e.target.value })}
             />
@@ -182,6 +197,7 @@ export default function Treatments() {
             <input
               type="number"
               inputMode="numeric"
+              min="0"
               value={draft.price}
               onChange={(e) => setDraft({ ...draft, price: e.target.value })}
             />
