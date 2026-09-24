@@ -216,7 +216,13 @@ function IncomeTab({ initialMissing = "" }) {
   const repo = useRepo("income");
   const apptRepo = useRepo("appointments");
   const packageRepo = useRepo("clientPackages");
+  // תוקן QA (2026-09): productRepo + products נדרשים כדי לאפשר החזרת מלאי
+  // בעת מחיקת הכנסה ממכירת מוצר (ראו planLinkedRecords/executeLinkedRecords
+  // למטה) — לפני התיקון, מחיקת מכירה שגויה/כפולה לא הציעה כלל להחזיר את
+  // הכמות למלאי, והמלאי נשאר חסר לצמיתות עד תיקון ידני.
   const { items: packages } = useCollectionData("clientPackages");
+  const { items: products } = useCollectionData("products");
+  const productRepo = useRepo("products");
   const log = useAuditLog();
   const confirmDialog = useConfirm();
   const toast = useToast();
@@ -291,10 +297,11 @@ function IncomeTab({ initialMissing = "" }) {
     });
   }
 
-  // מחיקת הכנסה משויכת לתור/סדרה עלולה להשאיר "יתום" ביומן/בכרטיסיית הלקוחה
-  // אם לא מטופלת במפורש. השאלות ("למחוק גם את...") נשאלות מיד (דורשות קלט
-  // מהמשתמשת ולא ניתנות לדחייה), אבל הביצוע בפועל נדחה יחד עם שאר ה-Undo —
-  // כך שגם מחיקת הכנסה עם רשומות מקושרות ניתנת לביטול תוך 5 שניות.
+  // מחיקת הכנסה משויכת לתור/סדרה/מכירת מוצר עלולה להשאיר "יתום" (ביומן,
+  // בכרטיסיית הלקוחה, או במלאי) אם לא מטופלת במפורש. השאלות ("למחוק גם
+  // את...") נשאלות מיד (דורשות קלט מהמשתמשת ולא ניתנות לדחייה), אבל הביצוע
+  // בפועל נדחה יחד עם שאר ה-Undo — כך שגם מחיקת הכנסה עם רשומות מקושרות
+  // ניתנת לביטול תוך 5 שניות.
   async function planLinkedRecords(r) {
     if (r.source === "appointment" && r.appointmentId) {
       const alsoDeleteAppt = await confirmDialog({
@@ -320,6 +327,21 @@ function IncomeTab({ initialMissing = "" }) {
         danger: true,
       });
       return { deletePackage: alsoDeletePkg ? pkg : null };
+    }
+
+    // תוקן QA (2026-09) — הכנסה ממכירת מוצר: מציעה להחזיר את הכמות שנמכרה
+    // למלאי המוצר. אם המוצר עצמו כבר נמחק בינתיים, אין מה להחזיר אליו —
+    // ממשיכים למחיקת ההכנסה בלבד.
+    if (r.source === "product" && r.productId) {
+      const product = products.find((p) => p.id === r.productId);
+      if (!product) return {};
+      const qty = Number(r.quantity) || 1;
+      const alsoRestock = await confirmDialog({
+        title: "מחיקת מכירת מוצר",
+        message: `האם להחזיר ${qty} יחיד${qty === 1 ? "ה" : "ות"} למלאי "${product.name}"?`,
+        confirmLabel: "החזרה למלאי",
+      });
+      return { restockProduct: alsoRestock ? { id: product.id, qty, currentStock: product.stock ?? 0 } : null };
     }
 
     return {};
@@ -349,6 +371,14 @@ function IncomeTab({ initialMissing = "" }) {
         entity: { type: "clientPackage", id: pkg.id, desc: `${pkg.clientName} — ${pkg.seriesName}` },
       });
     }
+    if (plan.restockProduct) {
+      const { id: productId, qty, currentStock } = plan.restockProduct;
+      try {
+        await productRepo.update(productId, { stock: currentStock + qty });
+      } catch {
+        /* עדכון המלאי נכשל — ההכנסה עדיין תימחק; ניתן לתקן ידנית במסך המוצרים */
+      }
+    }
   }
 
   async function remove(r) {
@@ -361,8 +391,8 @@ function IncomeTab({ initialMissing = "" }) {
     });
     if (!ok) return;
 
-    // שאלות על רשומות מקושרות (תור/חבילה) נשאלות מיד — הן דורשות החלטה
-    // מהמשתמשת ולא ניתן לדחות אותן ל-5 השניות של ה-Undo.
+    // שאלות על רשומות מקושרות (תור/חבילה/מלאי) נשאלות מיד — הן דורשות
+    // החלטה מהמשתמשת ולא ניתן לדחות אותן ל-5 השניות של ה-Undo.
     const plan = await planLinkedRecords(r);
 
     setHiddenIds((prev) => new Set(prev).add(r.id));

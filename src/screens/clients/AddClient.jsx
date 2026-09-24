@@ -4,12 +4,14 @@ import ScreenHeader from "../../components/ScreenHeader";
 import ClientBasicFields from "./ClientBasicFields";
 import DiagnosisForm from "./DiagnosisForm";
 import { useCollectionData, useRepo } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { normalizePhone, ageFromBirthday, normalizeReferral } from "./clientUtils";
 
 export default function AddClient() {
   const navigate = useNavigate();
   const { items: clients } = useCollectionData("clients");
   const repo = useRepo("clients");
+  const confirmDialog = useConfirm();
 
   const [step, setStep] = useState(1);
   const [basic, setBasic] = useState({ emailInvite: false });
@@ -24,16 +26,31 @@ export default function AddClient() {
 
   const canProceed = (basic.firstName || "").trim().length > 0;
 
+  // תוקן QA (2026-09): היה חסר try/catch — כשל רשת/Firestore באמצע שמירת
+  // לקוחה חדשה השאיר את הכפתור נעול לצמיתות על "שומרת…" (setSaving(true)
+  // לא התאפס אף פעם) בלי שום הודעת שגיאה, ובפועל איבד את כל מה שהוזן
+  // בטופס דו-השלבי (פרטים + אבחון עור מלא) אם המשתמשת רעננה את הדף. אותו
+  // דפוס טיפול-שגיאות שכבר קיים ב-AppointmentForm/Series/CloseAppointment/
+  // SeriesPurchase/ProductSell (§4.7.1 בהנחיות הפרויקט).
   async function save() {
     setSaving(true);
-    // normalizeReferral: רשת ביטחון — הלקוחה המפנה נשמרת רק כשמקור ההגעה
-    // הוא "המלצה" (ראו clientUtils.js).
-    const id = await repo.add({
-      ...normalizeReferral(basic),
-      diagnosis,
-      archived: false,
-    });
-    navigate(`/clients/${id}`, { replace: true });
+    try {
+      // normalizeReferral: רשת ביטחון — הלקוחה המפנה נשמרת רק כשמקור ההגעה
+      // הוא "המלצה" (ראו clientUtils.js).
+      const id = await repo.add({
+        ...normalizeReferral(basic),
+        diagnosis,
+        archived: false,
+      });
+      navigate(`/clients/${id}`, { replace: true });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת הלקוחה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   return (

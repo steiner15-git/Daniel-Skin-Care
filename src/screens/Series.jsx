@@ -83,8 +83,9 @@ function DefinitionsTab() {
       treatments: d.treatments,
       treatmentIds: d.treatments.map((t) => t.id),
       treatmentName: d.treatments.map((t) => t.name).join(", "),
-      sessions: Number(d.sessions) || 0,
-      price: Number(d.price) || 0,
+      sessions: Math.max(0, Number(d.sessions) || 0),
+      // תוקן QA (2026-09): מחיר חבילה שלילי (הקלדה בטעות) נעצר ב-0.
+      price: Math.max(0, Number(d.price) || 0),
       expiryDate: d.expiryDate || null,
     };
   }
@@ -300,6 +301,7 @@ function SeriesFields({ d, setD, treatments, onSave, onCancel, editing }) {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={d.sessions}
             onChange={(e) => setD({ ...d, sessions: e.target.value })}
           />
@@ -309,6 +311,7 @@ function SeriesFields({ d, setD, treatments, onSave, onCancel, editing }) {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={d.price}
             onChange={(e) => setD({ ...d, price: e.target.value })}
           />

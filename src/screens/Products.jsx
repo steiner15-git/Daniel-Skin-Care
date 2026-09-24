@@ -59,7 +59,8 @@ function InventoryTab() {
   function payload(d) {
     return {
       name: d.name.trim(),
-      price: Number(d.price) || 0,
+      // תוקן QA (2026-09): מחיר מוצר שלילי (הקלדה בטעות) נעצר ב-0.
+      price: Math.max(0, Number(d.price) || 0),
       stock: Number(d.stock) || 0,
       lowStockThreshold: Number(d.lowStockThreshold) || 0,
     };
@@ -201,6 +202,7 @@ function ProductFields({ d, setD, onSave, onCancel, editing }) {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={d.price}
             onChange={(e) => setD({ ...d, price: e.target.value })}
           />
@@ -210,6 +212,7 @@ function ProductFields({ d, setD, onSave, onCancel, editing }) {
           <input
             type="number"
             inputMode="numeric"
+            min="0"
             value={d.stock}
             onChange={(e) => setD({ ...d, stock: e.target.value })}
           />
@@ -220,6 +223,7 @@ function ProductFields({ d, setD, onSave, onCancel, editing }) {
         <input
           type="number"
           inputMode="numeric"
+          min="0"
           placeholder="0"
           value={d.lowStockThreshold}
           onChange={(e) => setD({ ...d, lowStockThreshold: e.target.value })}

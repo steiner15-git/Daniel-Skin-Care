@@ -31,18 +31,24 @@ export default function Calendar() {
   // אירועים שנמחקו אופטימית ל-Undo (ראו ToastProvider).
   const [hiddenEventIds, setHiddenEventIds] = useState(() => new Set());
 
-  // Phase 4 §9 — appointments/income מוגבלים לשנה המוצגת כרגע ביומן
-  // (cursor), במקום טעינת כל ההיסטוריה מאז ומתמיד. מתעדכן אוטומטית כשעוברים
-  // לשנה אחרת (חצי החודש ‹/› ב-cal-nav, שיכולים לחצות שנה). income דרוש רק
-  // כדי לבדוק "שולם/לא שולם" עבור תורים שכבר מוצגים (ItemRow) — הכנסה
-  // כמעט תמיד נרשמת באותה שנה שבה נסגר התור, כך שאותו טווח מספיק.
-  // מגבלה מודעת: מעבר בין שנים ב"תצוגת רשימה" (checkbox "הצג עבר") מציג
-  // רק עבר בתוך אותה שנה קלנדרית — לא היסטוריה מלאה כמו קודם; ניווט לשנה
-  // אחרת נעשה דרך תצוגת "לוח שנה" (cal-nav), שמעדכנת את ה-cursor.
+  // Phase 4 §9 — appointments מוגבלים לשנה המוצגת כרגע ביומן (cursor), במקום
+  // טעינת כל ההיסטוריה מאז ומתמיד. מתעדכן אוטומטית כשעוברים לשנה אחרת.
+  //
+  // תיקון QA (2026-09): income *אינו* מוגבל לשנה — נשאב במלואו, כמו
+  // ב-ClientCard.jsx/BottomNav.jsx/Dashboard.jsx. ההנחה הקודמת ("הכנסה כמעט
+  // תמיד נרשמת באותה שנה שבה נסגר התור") בלבלה בין "שנת סגירת התור" לבין
+  // "שנת התור המוצג ביומן" (cursor.getFullYear()): שדה "תאריך תשלום" ב-
+  // CloseAppointment.jsx ברירת המחדל שלו היא היום, לא תאריך התור — כך שתור
+  // מסוף שנה קלנדרית שנסגר בתחילת השנה הבאה יוצר רשומת income בשנה השונה
+  // משנת התור. עם income מוגבל לאותה שנה כמו appointments, incomeById
+  // לא מוצא את ההכנסה, וה-UI מציג "בוצע · לא שולם" גם כשהתשלום כבר אומת —
+  // מידע כוזב על מצב תשלום. income אינו כבד כמו appointments (אין צורך
+  // ב-year-scoping כדי לשמור על ביצועים), וכל שאר המסכים כבר שואבים אותו
+  // במלואו — כך שברוב המקרים אין אפילו עלות רשת נוספת (מנוי משותף קיים).
   const year = cursor.getFullYear();
   const { items: appts, loading: la } = useYearRangeCollectionData("appointments", "start", year);
   const { items: events, loading: le } = useCollectionData("events");
-  const { items: income } = useYearRangeCollectionData("income", "date", year);
+  const { items: income } = useCollectionData("income");
   const apptRepo = useRepo("appointments");
   const eventRepo = useRepo("events");
 

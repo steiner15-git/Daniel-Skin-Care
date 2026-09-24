@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 
 const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
@@ -15,6 +16,7 @@ function defaultDays() {
 
 export default function WorkingHours() {
   const { data, loading, save } = useSettingDoc("workingHours");
+  const confirmDialog = useConfirm();
   const [days, setDays] = useState(defaultDays());
   const [saved, setSaved] = useState(false);
 
@@ -27,9 +29,18 @@ export default function WorkingHours() {
     setSaved(false);
   }
 
+  // תוקן QA (2026-09): נוסף try/catch.
   async function onSave() {
-    await save({ days });
-    setSaved(true);
+    try {
+      await save({ days });
+      setSaved(true);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת שעות הפעילות נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   if (loading) return <p className="muted">טוען…</p>;

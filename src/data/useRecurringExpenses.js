@@ -1,11 +1,19 @@
 import { useEffect, useRef } from "react";
-import { useCollectionData, useRepo } from "./index";
+import { useCollectionData, useBatchRepo } from "./index";
 import { dateInputValue } from "../utils/datetime";
 
 // הוצאה קבועה (חודשית/שנתית) נרשמת אוטומטית בכל תקופה שחלפה.
 // אין שרת רקע — הרישום מתבצע בעת טעינת האפליקציה: לכל תבנית קבועה נוצרות
 // רשומות הוצאה רגילות עבור כל תקופה שעברה מאז הרישום האחרון ועד היום.
 // שדה lastPosted על התבנית מבטיח אידמפוטנטיות (לא נוצרות כפילויות בין טעינות).
+//
+// תוקן QA (2026-09): כל ה-add-ים של התקופות שחלפו + עדכון lastPosted על
+// התבנית נכתבים כעת כ-batch אטומי אחד (במקום סדרת קריאות repo נפרדות).
+// לפני התיקון, אם האפליקציה נסגרה/התרעננה בין יצירת רשומת ההוצאה
+// (repo.add) לבין עדכון lastPosted — הטעינה הבאה הייתה מזהה את אותה
+// תקופה כ"עדיין לא נרשמה" ויוצרת אותה שוב, כי lastPosted לא התעדכן. עם
+// batchRepo, כל התקופות שנוצרו לתבנית נתונה ועדכון lastPosted שלה מצליחים
+// יחד או נכשלים יחד — אין מצב ביניים.
 
 function nextPeriod(dateStr, kind) {
   const d = new Date(dateStr);
@@ -30,7 +38,7 @@ function pendingDates(template, today) {
 
 export function useRecurringExpenses() {
   const { items } = useCollectionData("expenses");
-  const repo = useRepo("expenses");
+  const batchRepo = useBatchRepo();
   const running = useRef(false);
 
   useEffect(() => {
@@ -46,8 +54,11 @@ export function useRecurringExpenses() {
       try {
         for (const t of templates) {
           const dates = pendingDates(t, today);
-          for (const date of dates) {
-            await repo.add({
+          const ops = dates.map((date) => ({
+            name: "expenses",
+            id: batchRepo.newId("expenses"),
+            type: "add",
+            data: {
               date,
               description: t.description,
               businessName: t.businessName,
@@ -58,9 +69,18 @@ export function useRecurringExpenses() {
               category: t.category,
               recurring: null,
               generatedFrom: t.id,
-            });
-          }
-          await repo.update(t.id, { lastPosted: dates[dates.length - 1] });
+            },
+          }));
+          ops.push({
+            name: "expenses",
+            id: t.id,
+            type: "update",
+            data: { lastPosted: dates[dates.length - 1] },
+          });
+          // batch לכל תבנית בנפרד: תבניות שונות אינן תלויות זו בזו, וכשל
+          // בתבנית אחת (למשל quota) לא אמור לחסום רישום של תבניות אחרות
+          // שכן ממתינות.
+          await batchRepo.commit(ops);
         }
       } finally {
         running.current = false;

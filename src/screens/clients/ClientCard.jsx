@@ -47,6 +47,7 @@ export default function ClientCard() {
   const [tab, setTab] = useState(location.state?.tab || "details");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const duplicatePhone = useMemo(() => {
     if (!editing || !draft) return false;
@@ -68,17 +69,35 @@ export default function ClientCard() {
     setDraft({ ...client });
     setEditing(true);
   }
+  // תוקן QA (2026-09): נוסף try/catch. לפני התיקון, כשל רשת/Firestore בעת
+  // אישור עריכת לקוחה היה יוצא בשקט — ה-UI פשוט לא היה משתנה, בלי הודעת
+  // שגיאה, והמשתמשת לא הייתה יודעת אם העריכה נשמרה או לא. כעת נשארים
+  // במצב עריכה (עם ה-draft הקיים) ומוצגת הודעה מפורשת.
   async function confirmEdit() {
-    // normalizeReferral: הלקוחה המפנה נשמרת רק כשמקור ההגעה הוא "המלצה".
-    // מנקה גם הפניה "יתומה" שנשארה מלפני התיקון (ראו clientUtils.js).
-    const cleaned = normalizeReferral(draft);
-    await repo.update(id, cleaned);
-    await log({
-      action: "client_edit",
-      entity: { type: "client", id, desc: fullName(cleaned) },
-    });
-    setEditing(false);
+    setSaving(true);
+    try {
+      // normalizeReferral: הלקוחה המפנה נשמרת רק כשמקור ההגעה הוא "המלצה".
+      // מנקה גם הפניה "יתומה" שנשארה מלפני התיקון (ראו clientUtils.js).
+      const cleaned = normalizeReferral(draft);
+      await repo.update(id, cleaned);
+      await log({
+        action: "client_edit",
+        entity: { type: "client", id, desc: fullName(cleaned) },
+      });
+      setEditing(false);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת פרטי הלקוחה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    } finally {
+      setSaving(false);
+    }
   }
+  // תוקן QA (2026-09): נוסף try/catch. לפני התיקון, כשל בהעברה לארכיון היה
+  // עלול לנווט בחזרה למסך הלקוחות (navigate("/clients")) גם אם הכתיבה
+  // בפועל נכשלה — נותן רושם שגוי שהפעולה הצליחה.
   async function archive() {
     const ok = await confirmDialog({
       title: "שליחה לארכיון",
@@ -87,12 +106,20 @@ export default function ClientCard() {
       danger: true,
     });
     if (!ok) return;
-    await repo.update(id, { archived: true });
-    await log({
-      action: "client_archive",
-      entity: { type: "client", id, desc: fullName(client) },
-    });
-    navigate("/clients");
+    try {
+      await repo.update(id, { archived: true });
+      await log({
+        action: "client_archive",
+        entity: { type: "client", id, desc: fullName(client) },
+      });
+      navigate("/clients");
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "העברה לארכיון נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
 
   return (
@@ -126,6 +153,7 @@ export default function ClientCard() {
           draft={draft}
           setDraft={setDraft}
           duplicatePhone={duplicatePhone}
+          saving={saving}
           onStartEdit={startEdit}
           onCancel={() => setEditing(false)}
           onConfirm={confirmEdit}
@@ -150,6 +178,7 @@ function DetailsTab({
   draft,
   setDraft,
   duplicatePhone,
+  saving,
   onStartEdit,
   onCancel,
   onConfirm,
@@ -197,8 +226,8 @@ function DetailsTab({
           <button className="btn btn--muted" onClick={onCancel}>
             ביטול
           </button>
-          <button className="btn" onClick={onConfirm}>
-            אישור שמירה
+          <button className="btn" disabled={saving} onClick={onConfirm}>
+            {saving ? "שומרת…" : "אישור שמירה"}
           </button>
         </div>
       </>
@@ -483,15 +512,23 @@ function PackagesSection({ packages, incomeById }) {
       expiryDate: draft.expiryDate || null,
       status: draft.status,
     };
-    await repo.update(p.id, patch);
-    await log({
-      action: "package_edit",
-      entity: { type: "clientPackage", id: p.id, desc: `${p.clientName} — ${p.seriesName}` },
-      before: { remainingSessions: p.remainingSessions, expiryDate: p.expiryDate || null, status: p.status },
-      after: patch,
-    });
-    setEditId(null);
-    setDraft(null);
+    try {
+      await repo.update(p.id, patch);
+      await log({
+        action: "package_edit",
+        entity: { type: "clientPackage", id: p.id, desc: `${p.clientName} — ${p.seriesName}` },
+        before: { remainingSessions: p.remainingSessions, expiryDate: p.expiryDate || null, status: p.status },
+        after: patch,
+      });
+      setEditId(null);
+      setDraft(null);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "עדכון החבילה נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+    }
   }
   async function remove(p) {
     const ok = await confirmDialog({
@@ -542,6 +579,7 @@ function PackagesSection({ packages, incomeById }) {
                 <input
                   type="number"
                   inputMode="numeric"
+                  min="0"
                   value={draft.remainingSessions}
                   onChange={(e) => setDraft({ ...draft, remainingSessions: e.target.value })}
                 />
