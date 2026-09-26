@@ -1,5 +1,6 @@
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
+import { DriveAuthError, isDriveAuthFailure } from "../auth/googleDrive";
 
 const BACKUP_NAME = "daniel-skin-care-backup.xlsx";
 const XLSX_MIME =
@@ -141,16 +142,19 @@ async function buildWorkbookBase64(uid) {
 }
 
 // מחפש קובץ גיבוי קיים לפי שם (לא בפח). עם scope drive.file החיפוש מחזיר רק
-// קבצים שהאפליקציה (אותו OAuth client) יצרה — בדיוק מה שמתאים כאן. כשל בחיפוש
-// אינו קריטי: מחזירים null והקורא יוצר קובץ חדש.
+// קבצים שהאפליקציה (אותו OAuth client) יצרה — בדיוק מה שמתאים כאן.
+// כשל-אימות (טוקן נדחה) נזרק כ-DriveAuthError ומטופל ע"י withDriveToken
+// שקורא ל-performBackup כולו (ראו runBackup למטה) — כל כשל אחר (רשת/quota,
+// לא נמצא) אינו קריטי כאן: מוחזר null והקורא ייצור קובץ חדש.
 async function findExistingBackupId(token) {
+  const q = encodeURIComponent(`name='${BACKUP_NAME}' and trashed=false`);
+  const res = await fetch(
+    `${DRIVE_FILES}?q=${q}&orderBy=modifiedTime%20desc&pageSize=1&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (await isDriveAuthFailure(res)) throw new DriveAuthError(res.status);
+  if (!res.ok) return null;
   try {
-    const q = encodeURIComponent(`name='${BACKUP_NAME}' and trashed=false`);
-    const res = await fetch(
-      `${DRIVE_FILES}?q=${q}&orderBy=modifiedTime%20desc&pageSize=1&fields=files(id)`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) return null;
     const json = await res.json();
     return json.files?.[0]?.id || null;
   } catch {
@@ -159,7 +163,7 @@ async function findExistingBackupId(token) {
 }
 
 // העלאה: PATCH לקובץ קיים (כשיש fileId), אחרת POST ליצירת קובץ חדש.
-function uploadWorkbook(token, fileId, base64) {
+async function uploadWorkbook(token, fileId, base64) {
   const boundary = "dscbnd" + Math.random().toString(36).slice(2);
   const metadata = { name: BACKUP_NAME, mimeType: XLSX_MIME };
 
@@ -177,7 +181,7 @@ function uploadWorkbook(token, fileId, base64) {
     ? `${DRIVE_UPLOAD}/${fileId}?uploadType=multipart`
     : `${DRIVE_UPLOAD}?uploadType=multipart`;
 
-  return fetch(url, {
+  const res = await fetch(url, {
     method: fileId ? "PATCH" : "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -185,18 +189,18 @@ function uploadWorkbook(token, fileId, base64) {
     },
     body,
   });
+  if (await isDriveAuthFailure(res)) throw new DriveAuthError(res.status);
+  return res;
 }
 
-// גיבוי אוטומטי ל-Drive: מעלה חוברת Excel יחידה, ומעדכן את אותו קובץ בכל פעם
-// (ללא צבירת קבצים — לא מעמיס על מקום ב-Drive).
-//
-// עמידות: אם המזהה השמור כבר אינו תקף (הקובץ נמחק ב-Drive, או שייך לחשבון/
-// client אחר) — Drive מחזיר 404. במקום להיכשל לנצח (כפי שקרה כשה-PATCH לא
-// נפל חזרה ל-POST), מנקים את המזהה, מחפשים קובץ גיבוי קיים לפי שם, ואם אין —
-// יוצרים חדש.
-export async function runBackup(uid, token) {
-  const base64 = await buildWorkbookBase64(uid);
-
+// ליבת הגיבוי בפועל, פר-טוקן: מחפשת קובץ קיים ומעלה/מעדכנת אותו, כולל
+// ההתאוששות הקיימת מ-404 (קובץ שנמחק ב-Drive או שהמזהה השמור שייך
+// לחשבון/client אחר). עטופה כולה ע"י withDriveToken ב-runBackup למטה כיחידה
+// אחת — בטוח לעשות זאת כאן כי כל הפעולות הפנימיות אידמפוטנטיות (החיפוש הוא
+// read-only; ההעלאה עצמה היא PATCH/POST מלא לפי id/name קבועים, לא צבירה) —
+// אם 401 קורה באמצע והכל רץ שוב מההתחלה עם טוקן טרי, לא נוצרת כפילות או
+// תופעת לוואי.
+async function performBackup(uid, token, base64) {
   const storedId = readBackupFileId(uid) || null;
   // אין מזהה שמור (דפדפן חדש / localStorage נוקה) — קודם מחפשים קובץ קיים
   // כדי לא ליצור כפילות ב-Drive.
@@ -218,4 +222,17 @@ export async function runBackup(uid, token) {
   const json = await res.json();
   if (json.id) writeBackupFileId(uid, json.id);
   return json.id;
+}
+
+// גיבוי אוטומטי ל-Drive: מעלה חוברת Excel יחידה, ומעדכן את אותו קובץ בכל פעם
+// (ללא צבירת קבצים — לא מעמיס על מקום ב-Drive).
+//
+// מקבל withDriveToken (מ-useAuth(), ראו AuthProvider.jsx) ולא token גולמי —
+// כך שאם Drive דוחה את הטוקן באמצע הגיבוי (401/403-authError, מזוהה ע"י
+// findExistingBackupId/uploadWorkbook למעלה), מתבצע רענון שקט + ניסיון חוזר
+// יחיד לכל תהליך הגיבוי, במקום שהגיבוי האוטומטי ייכשל בשקט עד ההתחברות
+// הידנית הבאה.
+export async function runBackup(uid, withDriveToken) {
+  const base64 = await buildWorkbookBase64(uid);
+  return withDriveToken((token) => performBackup(uid, token, base64));
 }

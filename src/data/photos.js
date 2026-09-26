@@ -3,16 +3,24 @@
 // במצב תצוגה מקומי המודול אינו בשימוש — התמונות נשמרות כ-base64 ב-localStorage.
 
 import { IS_LOCAL } from "./index";
+import { DriveAuthError, isDriveAuthFailure } from "../auth/googleDrive";
 
 const DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 
+// כל קריאות ה-Drive במודול הזה עוברות דרך driveFetch עם token נתון (לא
+// מבצעות רענון/ניסיון-חוזר בעצמן — ראו הערת "One token authority" למטה).
+// כשל אימות (טוקן נדחה) מזוהה כאן וזורק DriveAuthError, שקוד קורא שעוטף את
+// הפעולה ב-withDriveToken() (ראו AuthProvider.jsx) יודע לתפוס ולטפל בו:
+// מבטל את הטוקן המקומי, מרענן בשקט, ומריץ את אותה פעולה מחדש פעם אחת בלבד.
+// שום פונקציה במודול הזה לא צריכה/רשאית לממש רענון עצמאי משלה.
 async function driveFetch(url, token, opts = {}) {
   const res = await fetch(url, {
     ...opts,
     headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) },
   });
+  if (await isDriveAuthFailure(res)) throw new DriveAuthError(res.status);
   if (!res.ok) throw new Error(`Drive ${res.status}`);
   return res;
 }
@@ -101,14 +109,18 @@ export function resizeImage(file, maxWidth = 1600, quality = 0.85, mime = "image
   });
 }
 
-// שומר תמונה מקובץ: במצב מקומי מחזיר { localData }; בענן מעלה ל-Drive
-// תחת נתיב התיקיות שסופק ומחזיר { driveFileId }. משמש גם לאלבום וגם לחשבוניות.
-export async function storeImage(file, { folders, ensureDriveToken }) {
+// שומר תמונה מקובץ: במצב מקומי מחזיר { localData }; בענן מעלה ל-Drive תחת
+// נתיב התיקיות שסופק ומחזיר { driveFileId }. משמש גם לאלבום וגם לחשבוניות.
+//
+// מקבל withDriveToken (מ-useAuth(), ראו AuthProvider.jsx) ולא ensureDriveToken
+// ישירות — כך שהעלאה בפועל מוגנת ברענון+ניסיון-חוזר יחיד אם Drive דוחה את
+// הטוקן באמצע (לא רק אם הוא "נראה" פג-תוקף לפי המעקב המקומי לפני שהתחלנו).
+export async function storeImage(file, { folders, withDriveToken }) {
   const dataUrl = await resizeImage(file);
   if (IS_LOCAL) return { localData: dataUrl, mimeType: "image/jpeg" };
-  const token = await ensureDriveToken();
-  if (!token) throw new Error("no-token");
   const base64 = dataUrl.split(",")[1];
-  const driveFileId = await uploadPhoto(token, { folders, base64, mimeType: "image/jpeg" });
+  const driveFileId = await withDriveToken((token) =>
+    uploadPhoto(token, { folders, base64, mimeType: "image/jpeg" })
+  );
   return { driveFileId, mimeType: "image/jpeg" };
 }
