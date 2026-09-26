@@ -25,7 +25,7 @@ function reasonText(reason) {
 }
 
 export default function Backup() {
-  const { user, ensureDriveToken, reauthorizeDrive } = useAuth();
+  const { user, withDriveToken, reauthorizeDrive } = useAuth();
   const confirmDialog = useConfirm();
   const [status, setStatus] = useState(() => readBackupStatus());
   const [running, setRunning] = useState(false);
@@ -39,7 +39,7 @@ export default function Backup() {
   // מעבר לחותמת הגיבוי האחרון.
   async function runNow() {
     setRunning(true);
-    const result = await runBackupOnce(user.uid, ensureDriveToken, { force: true });
+    const result = await runBackupOnce(user.uid, withDriveToken, { force: true });
     setStatus(readBackupStatus());
     setRunning(false);
     if (result.ok) return;
@@ -54,7 +54,7 @@ export default function Backup() {
       if (!reconnect) return;
       await reauthorizeDrive();
       setRunning(true);
-      const retry = await runBackupOnce(user.uid, ensureDriveToken, { force: true });
+      const retry = await runBackupOnce(user.uid, withDriveToken, { force: true });
       setStatus(readBackupStatus());
       setRunning(false);
       if (!retry.ok && retry.reason === "other") {

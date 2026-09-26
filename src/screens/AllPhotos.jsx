@@ -19,7 +19,7 @@ export default function AllPhotos() {
   const { items: clients } = useCollectionData("clients");
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const repo = useRepo("photos");
-  const { ensureDriveToken } = useAuth();
+  const { withDriveToken } = useAuth();
   const confirmDialog = useConfirm();
   const toast = useToast();
   const [openId, setOpenId] = useState(null);
@@ -125,8 +125,9 @@ export default function AllPhotos() {
         await repo.remove(p.id);
         if (!IS_LOCAL && p.driveFileId) {
           try {
-            const token = await ensureDriveToken();
-            if (token) await deletePhoto(token, p.driveFileId);
+            // withDriveToken (במקום ensureDriveToken+deletePhoto ישירות) —
+            // מטפל ברענון+ניסיון-חוזר יחיד בשקיפות אם Drive דוחה את הטוקן.
+            await withDriveToken((token) => deletePhoto(token, p.driveFileId));
           } catch {
             /* מחיקת הקובץ מ-Drive נכשלה — המטא-דאטה כבר הוסרה */
           }

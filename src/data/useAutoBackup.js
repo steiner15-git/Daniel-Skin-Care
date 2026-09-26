@@ -22,24 +22,28 @@ const SIX_HOURS = 6 * 60 * 60 * 1000;
 // מחותמת הגיבוי המוצלח האחרון (watermark) — מדלגים לגמרי על גישת Drive
 // (בלי בקשת טוקן, בלי בקשת רשת).
 //
+// עדכון ארכיטקטורה (ספטמבר 2026) — טוקן Drive: מקבלת withDriveToken (לא
+// ensureDriveToken) ומעבירה אותה ישירות ל-runBackup, שמבצע את כל הגיבוי
+// דרכה — כך שאם Drive דוחה את הטוקן באמצע (401/403-authError בפועל, גם אם
+// הטוקן נראה טרי לפי המעקב המקומי לפני שהתחלנו — למשל אחרי שהאפליקציה
+// הייתה מושהית ברקע ולא הספיקה לרענן פרואקטיבית), מתבצע רענון שקט + ניסיון
+// חוזר יחיד לכל תהליך הגיבוי באופן שקוף, במקום כישלון גיבוי שרק לחיצה ידנית
+// על "התחברות מחדש" הייתה פותרת.
+//
 // מחזירה { ok: true, skipped: true } כשדילגה, { ok: true } בהצלחה, או
 // { ok: false, reason: "no-token" | "other", detail? } בכשל, כדי שהמסך היוזם
-// יוכל להציג הודעת שגיאה מתאימה למקרה של קריאה יזומה. detail הוא הסיבה
+// יוכל להציג הודעת שגיאה מתאימה למקרה של קריאה יזומה. "no-token" מכסה גם
+// את המקרה שבו לא היה טוקן בכלל וגם את המקרה שבו withDriveToken ניסתה
+// רענון שקט לאחר דחייה בפועל וגם הוא נכשל (code==="reauth-required") —
+// שתי התוצאות דורשות אותו UI (כפתור התחברות מחדש). detail הוא הסיבה
 // האמיתית (סטטוס HTTP + הודעת Drive) — נשמרת גם בסטטוס (lastErrorReason).
-export async function runBackupOnce(uid, ensureDriveToken, { force = false, currentMax = null } = {}) {
+export async function runBackupOnce(uid, withDriveToken, { force = false, currentMax = null } = {}) {
   if (!force && currentMax != null && currentMax <= readBackupWatermark()) {
     markBackupSkipped();
     return { ok: true, skipped: true };
   }
   try {
-    // נשלף טוקן טרי בזמן הריצה עצמה (ולא נלקח מ-state שנתפס מוקדם יותר)
-    // — כולל רענון שקט אם נדרש, במקום להיכשל בשקט על טוקן שכבר פג.
-    const token = await ensureDriveToken();
-    if (!token) {
-      markBackupError("no-token");
-      return { ok: false, reason: "no-token" };
-    }
-    await runBackup(uid, token);
+    await runBackup(uid, withDriveToken);
     markBackupSuccess();
     // "עכשיו" הוא חותמת בטוחה: הגיבוי שהושלם זה עתה כלל בהכרח כל שינוי
     // שקדם לרגע זה (ולכל היותר מפספס שינוי שקרה ממש תוך כדי בניית הקובץ —
@@ -47,6 +51,10 @@ export async function runBackupOnce(uid, ensureDriveToken, { force = false, curr
     writeBackupWatermark(Date.now());
     return { ok: true };
   } catch (e) {
+    if (e?.code === "no-token" || e?.code === "reauth-required") {
+      markBackupError("no-token");
+      return { ok: false, reason: "no-token" };
+    }
     console.error("[backup] failed", e);
     const detail = e?.status
       ? `HTTP ${e.status}${e.detail ? ` — ${e.detail}` : ""}`
@@ -57,7 +65,7 @@ export async function runBackupOnce(uid, ensureDriveToken, { force = false, curr
 }
 
 export function useAutoBackup() {
-  const { user, ensureDriveToken } = useAuth();
+  const { user, withDriveToken } = useAuth();
   // Phase 4 §8 — נרשמים לארבע הקולקציות המגובות דרך המאגר המשותף
   // (subscribeShared ב-data/firestore.js): אם מסך אחר כבר מנוי על אחת מהן
   // (BottomNav על income, למשל) לא נפתח מנוי Firestore נוסף — רק עוד צרכן
@@ -84,7 +92,7 @@ export function useAutoBackup() {
     function run() {
       // גיבוי אוטומטי לעולם לא יפיל או יאט את האפליקציה — הכשל כבר מטופל
       // ונרשם בתוך runBackupOnce עצמה.
-      runBackupOnce(user.uid, ensureDriveToken, { currentMax: currentMaxRef.current });
+      runBackupOnce(user.uid, withDriveToken, { currentMax: currentMaxRef.current });
     }
 
     const initial = setTimeout(run, 60000);
@@ -94,5 +102,5 @@ export function useAutoBackup() {
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, withDriveToken]);
 }

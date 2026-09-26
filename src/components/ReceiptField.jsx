@@ -17,7 +17,7 @@ function ReceiptModal({ value, onClose }) {
 
 // שדה צירוף תמונת חשבונית לטופס הכנסה/הוצאה — ידני, ללא AI.
 export default function ReceiptField({ value, onChange, folderName = "Invoices" }) {
-  const { ensureDriveToken } = useAuth();
+  const { withDriveToken } = useAuth();
   const fileRef = useRef(null);
   const [viewing, setViewing] = useState(false);
   const driveUpload = useDriveUpload();
@@ -44,10 +44,11 @@ export default function ReceiptField({ value, onChange, folderName = "Invoices" 
     driveUpload.reset();
     if (!IS_LOCAL && fileId) {
       try {
-        const token = await ensureDriveToken();
-        if (token) await deletePhoto(token, fileId);
+        // withDriveToken (במקום ensureDriveToken+deletePhoto ישירות) — מטפל
+        // ברענון+ניסיון-חוזר יחיד בשקיפות אם Drive דוחה את הטוקן.
+        await withDriveToken((token) => deletePhoto(token, fileId));
       } catch {
-        /* מחיקה מ-Drive נכשלה — הקישור כבר הוסר מהרשומה */
+        /* מחיקה מ-Drive נכשלה (כולל לאחר רענון+ניסיון-חוזר) — הקישור כבר הוסר מהרשומה */
       }
     }
   }
