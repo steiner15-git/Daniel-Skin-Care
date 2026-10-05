@@ -378,8 +378,12 @@ function ItemRow({ it, incomeById, onEditAppt, onCancelAppt, onResend, onClose, 
   // "בוצע" (status done) אינו שקול ל"שולם"! תור שחויב מחבילה נחשב מוסדר
   // תמיד (כי כבר שולם מראש ברכישת החבילה). תור רגיל נחשב "שולם" רק אם
   // ההכנסה המשויכת אליו בפועל מסומנת paid=true — לא רק כי הוא "בוצע".
+  // תור שכוסה במלואו מיתרת זיכוי (chargedFromCredit) נחשב מוסדר גם הוא —
+  // לא נוצרה לו הכנסה, כי השובר/הזיכוי כבר נרשמו קודם (addendum שוברים, D-1).
   const linkedIncome = isAppt && it.raw.incomeId ? incomeById[it.raw.incomeId] : null;
-  const isPaid = isDone && (!!it.raw.chargedFromPackage || linkedIncome?.paid === true);
+  const isPaid =
+    isDone &&
+    (!!it.raw.chargedFromPackage || !!it.raw.chargedFromCredit || linkedIncome?.paid === true);
 
   return (
     <div

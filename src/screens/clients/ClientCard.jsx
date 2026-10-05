@@ -3,6 +3,7 @@ import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
 import { where } from "firebase/firestore";
 import ScreenHeader from "../../components/ScreenHeader";
 import PaymentBadge from "../../components/PaymentBadge";
+import DateField from "../../components/DateField";
 import ClientBasicFields from "./ClientBasicFields";
 import DiagnosisSummary from "./DiagnosisSummary";
 import ClientAlbum from "./ClientAlbum";
@@ -13,6 +14,14 @@ import { formatDate } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { clientCancellationStats } from "../../utils/cancellations";
 import { whatsappUrl } from "../../utils/invite";
+import {
+  creditState,
+  creditBalance,
+  creditLabel,
+  CREDIT_STATE_LABEL,
+  round2,
+  toMillis,
+} from "../../utils/credits";
 import { useReminderSettings } from "../../data/useReminderSettings";
 import { useReferralRewardApproval } from "../../data/useReferralReward";
 import { completedReferralCounts, doneClientIds, referralRewardState } from "../../utils/reminders";
@@ -162,7 +171,9 @@ export default function ClientCard() {
         />
       )}
 
-      {tab === "appointments" && <AppointmentsTab appts={appts} clientId={id} />}
+      {tab === "appointments" && (
+        <AppointmentsTab appts={appts} clientId={id} clientName={fullName(client)} />
+      )}
 
       {tab === "products" && <ProductsTab clientId={id} />}
 
@@ -355,7 +366,7 @@ function DetailsTab({
   );
 }
 
-function AppointmentsTab({ appts, clientId }) {
+function AppointmentsTab({ appts, clientId, clientName }) {
   const { items: packages } = useCollectionData("clientPackages");
   const { items: income } = useCollectionData("income");
 
@@ -388,15 +399,19 @@ function AppointmentsTab({ appts, clientId }) {
 
   const myPackages = packages.filter((p) => p.clientId === clientId);
 
-  // "תשלומים נוספים": הכנסות ידניות (IncomeForm) שמקושרות ללקוחה דרך clientId.
-  // שאר סוגי ההכנסה כבר מוצגים במקומם — תור שנסגר בתורי העבר, רכישת סדרה בפס
-  // החבילות, מכירת מוצר בטאב "מוצרים" — ולכן לא נכללים כאן.
+  // "תשלומים נוספים": הכנסות ידניות (IncomeForm) והכנסות מרכישת שובר מתנה
+  // (VoucherPurchase — הקונה היא clientId של ההכנסה) שמקושרות ללקוחה דרך
+  // clientId. שאר סוגי ההכנסה כבר מוצגים במקומם — תור שנסגר בתורי העבר,
+  // רכישת סדרה בפס החבילות, מכירת מוצר בטאב "מוצרים" — ולכן לא נכללים כאן.
+  // (D-4: הסינון הורחב ל-"voucher".)
   const extraPayments = income
-    .filter((r) => r.source === "manual" && r.clientId === clientId)
+    .filter((r) => (r.source === "manual" || r.source === "voucher") && r.clientId === clientId)
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
   return (
     <>
+      <CreditsSection clientId={clientId} clientName={clientName} />
+
       <PackagesSection packages={myPackages} incomeById={incomeById} />
 
       {cancelStats.cancelledCount > 0 && (
@@ -433,6 +448,7 @@ function AppointmentsTab({ appts, clientId }) {
                   </strong>
                   <span className="muted">
                     {formatDate(r.date)} · <span className="sensitive">{formatILS(r.amount)}</span>
+                    {r.source === "voucher" && r.giftToName ? ` · ל${r.giftToName}` : ""}
                   </span>
                 </div>
               </div>
@@ -484,6 +500,335 @@ function packageState(p) {
   if (p.status !== "active" || (p.remainingSessions ?? 0) <= 0) return "נוצלה";
   if (p.expiryDate && new Date(p.expiryDate) < new Date(new Date().toDateString())) return "פקעה";
   return "פעילה";
+}
+
+// ---------- יתרת זיכוי (addendum שוברים/זיכוי, C-1..C-8) ----------
+// אזור "יתרת זיכוי" בטאב "רשימת תורים", מעל פס החבילות: סה"כ יתרה זמינה,
+// רשימת היתרות (שוברי מתנה שהתקבלו + זיכויים רגילים), הוספת זיכוי ידני
+// (ללא הכנסה — הכסף כבר נרשם קודם), ועריכה/מחיקה (CRUD). האזור מוצג תמיד
+// (בקומפקטיות כשאין יתרות), כי הוא נקודת הכניסה היחידה ליצירת זיכוי רגיל.
+// כל הסכומים מסומנים .sensitive (מצב קליניקה).
+const CREDIT_STATE_ORDER = { active: 0, expired: 1, used: 2 };
+
+function CreditsSection({ clientId, clientName }) {
+  const { items: allCredits } = useCollectionData("credits");
+  const repo = useRepo("credits");
+  const log = useAuditLog();
+  const confirmDialog = useConfirm();
+  const toast = useToast();
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ amount: "", reason: "", expiryDate: "" });
+  const [editId, setEditId] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  // יתרות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const thisYear = new Date().getFullYear();
+
+  const mine = useMemo(
+    () =>
+      allCredits
+        .filter((c) => c.clientId === clientId && !hiddenIds.has(c.id))
+        .sort((a, b) => {
+          const sa = CREDIT_STATE_ORDER[creditState(a)];
+          const sb = CREDIT_STATE_ORDER[creditState(b)];
+          if (sa !== sb) return sa - sb;
+          return toMillis(b.createdAt) - toMillis(a.createdAt);
+        }),
+    [allCredits, clientId, hiddenIds]
+  );
+  const balance = creditBalance(mine, clientId);
+
+  // כשל בכתיבת הלוג אחרי שהפעולה עצמה הצליחה לא אמור להציג "הפעולה נכשלה".
+  async function safeLog(entry) {
+    try {
+      await log(entry);
+    } catch (e) {
+      console.error("[audit] failed", e);
+    }
+  }
+
+  async function addCredit() {
+    const amount = round2(Math.max(0, Number(draft.amount) || 0));
+    if (amount <= 0) return;
+    setSaving(true);
+    try {
+      const reason = draft.reason.trim();
+      const newId = await repo.add({
+        clientId,
+        clientName,
+        amount,
+        remaining: amount,
+        source: "refund",
+        giftFromClientId: null,
+        giftFromName: null,
+        voucherId: null,
+        voucherName: null,
+        expiryDate: draft.expiryDate || null,
+        incomeId: null,
+        reason,
+        status: "active",
+      });
+      await safeLog({
+        action: "credit_create",
+        entity: { type: "credit", id: newId, desc: `${clientName} — זיכוי${reason ? ` · ${reason}` : ""}` },
+        after: { amount, expiryDate: draft.expiryDate || null },
+      });
+      setDraft({ amount: "", reason: "", expiryDate: "" });
+      setAdding(false);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "הוספת הזיכוי נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEdit(c) {
+    setEditId(c.id);
+    setEditDraft({
+      remaining: c.remaining ?? 0,
+      expiryDate: c.expiryDate || "",
+      status: c.status || "active",
+    });
+  }
+
+  async function saveEdit(c) {
+    // remaining נעצר בין 0 לסכום המקורי (0 ≤ remaining ≤ amount).
+    const remaining = Math.min(
+      round2(Math.max(0, Number(editDraft.remaining) || 0)),
+      round2(c.amount)
+    );
+    const patch = {
+      remaining,
+      expiryDate: editDraft.expiryDate || null,
+      status: remaining <= 0 ? "used" : editDraft.status,
+    };
+    setSaving(true);
+    try {
+      await repo.update(c.id, patch);
+      await safeLog({
+        action: "credit_edit",
+        entity: { type: "credit", id: c.id, desc: `${clientName} — ${creditLabel(c)}` },
+        before: { remaining: c.remaining, expiryDate: c.expiryDate || null, status: c.status },
+        after: patch,
+      });
+      setEditId(null);
+      setEditDraft(null);
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "עדכון הזיכוי נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // מחיקת יתרה אינה פוגעת בהכנסה של הקונה (C-6). Undo ל-5 שניות.
+  async function remove(c) {
+    const ok = await confirmDialog({
+      title: "מחיקת יתרת זיכוי",
+      message: `למחוק את היתרה (${creditLabel(c)})? ההכנסה מהרכישה, אם קיימת, לא תיפגע.`,
+      confirmLabel: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
+    setHiddenIds((prev) => new Set(prev).add(c.id));
+    toast.showUndo({
+      message: "יתרת הזיכוי נמחקה",
+      onUndo: () =>
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(c.id);
+          return next;
+        }),
+      onExpire: async () => {
+        try {
+          await repo.remove(c.id);
+          await safeLog({
+            action: "credit_delete",
+            entity: { type: "credit", id: c.id, desc: `${clientName} — ${creditLabel(c)}` },
+            before: { amount: c.amount, remaining: c.remaining },
+          });
+        } catch (e) {
+          console.error("[CreditsSection] delete failed", e);
+        }
+      },
+    });
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 8 }}>
+      <div className="card-head" style={{ marginBottom: mine.length > 0 || adding ? 8 : 0 }}>
+        <h3>יתרת זיכוי</h3>
+        <strong className="sensitive">{formatILS(balance)}</strong>
+      </div>
+
+      {mine.map((c) => {
+        const st = creditState(c);
+        if (editId === c.id) {
+          return (
+            <div key={c.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+              <strong>{creditLabel(c)}</strong>
+              <div className="row-2" style={{ marginTop: 8 }}>
+                <div className="field">
+                  <label>יתרה (מתוך {formatILS(c.amount)})</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    value={editDraft.remaining}
+                    onChange={(e) => setEditDraft({ ...editDraft, remaining: e.target.value })}
+                  />
+                </div>
+                <div className="field">
+                  <label>סטטוס</label>
+                  <select
+                    value={editDraft.status}
+                    onChange={(e) => setEditDraft({ ...editDraft, status: e.target.value })}
+                  >
+                    <option value="active">פעיל</option>
+                    <option value="used">נוצל</option>
+                  </select>
+                </div>
+              </div>
+              <div className="field">
+                <label>בתוקף עד (ריק = ללא תוקף)</label>
+                <DateField
+                  value={editDraft.expiryDate}
+                  onChange={(v) => setEditDraft({ ...editDraft, expiryDate: v })}
+                  fromYear={thisYear - 5}
+                  toYear={thisYear + 10}
+                />
+                {editDraft.expiryDate && (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    style={{ marginTop: 8 }}
+                    onClick={() => setEditDraft({ ...editDraft, expiryDate: "" })}
+                  >
+                    נקה תאריך
+                  </button>
+                )}
+              </div>
+              <div className="save-row" style={{ marginTop: 0 }}>
+                <button className="btn btn--muted" onClick={() => setEditId(null)}>
+                  ביטול
+                </button>
+                <button className="btn" disabled={saving} onClick={() => saveEdit(c)}>
+                  שמירה
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div key={c.id} className="read-row" style={{ alignItems: "center" }}>
+            <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <span>
+                {creditLabel(c)}{" "}
+                <span className={"badge " + (st === "active" ? "badge--ok" : "badge--info")}>
+                  {CREDIT_STATE_LABEL[st]}
+                </span>
+              </span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                <span className="sensitive">
+                  {formatILS(c.remaining)}/{formatILS(c.amount)}
+                </span>
+                {c.expiryDate ? ` · בתוקף עד ${c.expiryDate}` : ""}
+                {c.reason ? ` · ${c.reason}` : ""}
+              </span>
+            </span>
+            <span className="list-item__actions">
+              <button className="btn btn--ghost" onClick={() => startEdit(c)}>
+                עריכה
+              </button>
+              <button className="btn btn--muted" onClick={() => remove(c)}>
+                מחיקה
+              </button>
+            </span>
+          </div>
+        );
+      })}
+
+      {adding ? (
+        <div style={{ marginTop: 12 }}>
+          <div className="row-2">
+            <div className="field">
+              <label>סכום (₪)</label>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                value={draft.amount}
+                onChange={(e) => setDraft({ ...draft, amount: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <label>סיבה</label>
+              <input
+                value={draft.reason}
+                onChange={(e) => setDraft({ ...draft, reason: e.target.value })}
+              />
+            </div>
+          </div>
+          <div className="field">
+            <label>בתוקף עד (אופציונלי — ריק = ללא תוקף)</label>
+            <DateField
+              value={draft.expiryDate}
+              onChange={(v) => setDraft({ ...draft, expiryDate: v })}
+              fromYear={thisYear}
+              toYear={thisYear + 10}
+            />
+            {draft.expiryDate && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                style={{ marginTop: 8 }}
+                onClick={() => setDraft({ ...draft, expiryDate: "" })}
+              >
+                נקה תאריך
+              </button>
+            )}
+          </div>
+          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+            זיכוי אינו יוצר הכנסה — הוא מקוזז מתשלום עתידי של הלקוחה.
+          </p>
+          <div className="save-row" style={{ marginTop: 0 }}>
+            <button
+              className="btn btn--muted"
+              onClick={() => {
+                setAdding(false);
+                setDraft({ amount: "", reason: "", expiryDate: "" });
+              }}
+            >
+              ביטול
+            </button>
+            <button
+              className="btn"
+              disabled={saving || !(Number(draft.amount) > 0)}
+              onClick={addCredit}
+            >
+              {saving ? "שומרת…" : "הוספת זיכוי"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          className="btn btn--ghost btn--sm"
+          style={{ marginTop: mine.length > 0 ? 12 : 8 }}
+          onClick={() => setAdding(true)}
+        >
+          + הוספת זיכוי
+        </button>
+      )}
+    </div>
+  );
 }
 
 function PackagesSection({ packages, incomeById }) {
@@ -633,10 +978,11 @@ function PackagesSection({ packages, incomeById }) {
 
 // רשימת תורים בכרטיסיית לקוחה. showStatus=true (תורי עבר בלבד, addendum #5)
 // מוסיף תגית סטטוס/תשלום זהה ברוחה ל-ItemRow שב-Calendar.jsx: "מחבילה" לתור
-// שנסגר בפועל דרך חבילה, PaymentBadge לתור רגיל שנסגר, או "ממתין לסגירה"
-// (לחיץ → מסך אישור ביצוע) לתור שמועדו עבר וטרם נסגר. תורים עתידיים
-// (showStatus כברירת מחדל false) נשארים ללא שינוי — כולל תגית "מחבילה"
-// הישנה המבוססת על clientPackageId (כוונת חיוב, לא חיוב בפועל).
+// שנסגר בפועל דרך חבילה, "שולם מיתרה" לתור שכוסה במלואו מיתרת זיכוי (D-2),
+// PaymentBadge לתור רגיל שנסגר, או "ממתין לסגירה" (לחיץ → מסך אישור ביצוע)
+// לתור שמועדו עבר וטרם נסגר. תורים עתידיים (showStatus כברירת מחדל false)
+// נשארים ללא שינוי — כולל תגית "מחבילה" הישנה המבוססת על clientPackageId
+// (כוונת חיוב, לא חיוב בפועל).
 function ApptList({ list, incomeById = {}, showStatus = false }) {
   const navigate = useNavigate();
   return (
@@ -656,6 +1002,8 @@ function ApptList({ list, incomeById = {}, showStatus = false }) {
                 {showStatus &&
                   (a.chargedFromPackage ? (
                     <span className="badge badge--info">מחבילה</span>
+                  ) : a.chargedFromCredit ? (
+                    <span className="badge badge--ok">שולם מיתרה</span>
                   ) : isDone ? (
                     <PaymentBadge income={linkedIncome} />
                   ) : (

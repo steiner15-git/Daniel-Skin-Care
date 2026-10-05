@@ -23,6 +23,11 @@ const ACTION_LABELS = {
   appointment_delete: "מחיקת תור",
   appointment_cancel: "ביטול תור",
   referral_reward_given: "אישור מתנת הפניות",
+  voucher_purchase: "רכישת שובר מתנה",
+  credit_create: "הוספת זיכוי",
+  credit_edit: "עריכת זיכוי",
+  credit_delete: "מחיקת זיכוי",
+  credit_apply: "קיזוז מיתרת זיכוי",
 };
 
 const CURRENT_YEAR = new Date().getFullYear();

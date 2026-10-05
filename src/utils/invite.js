@@ -24,11 +24,35 @@ export const DEFAULT_INVITATION_BODY =
   "כתובת: {כתובת_עסק}\n\n" +
   "נתראה!\n{שם_עסק}";
 
+// תבנית שובר מתנה (addendum שוברים/זיכוי, T-3). הטוקן {סכום_שובר} מחזיר
+// מספר מעוצב בלבד, בלי סמל מטבע — ה-₪ נכתב כאן ישירות מיד אחריו (T-6).
+// אותה תבנית משמשת מייל וגם WhatsApp (ל-WhatsApp אין שדה "נושא").
+export const DEFAULT_VOUCHER_SUBJECT = "שובר מתנה מ{שם_עסק} 🎁";
+export const DEFAULT_VOUCHER_BODY =
+  "שלום {שם_מקבלת},\n" +
+  "{שם_קונה} שלחה לך שובר מתנה בסך {סכום_שובר}₪ ב{שם_עסק}! 🎁\n" +
+  "תוקף השובר: {תוקף}\n" +
+  "את הסכום אפשר לממש בכל טיפול, סדרה או מוצר.\n" +
+  "לתיאום: {טלפון_עסק} · {אימייל_עסק}\n" +
+  "כתובת: {כתובת_עסק}\n" +
+  "נשמח לראותך!\n" +
+  "{שם_עסק}";
+
 // מילוי תבנית הזימון בשדות דינמיים. לעולם ללא מחיר/עלות/רווח.
 export function fillTemplate(text, tokens) {
   return String(text || "").replace(/\{([^}]+)\}/g, (m, key) =>
     tokens[key] != null ? tokens[key] : m
   );
+}
+
+// טוקנים משותפים לשתי התבניות (T-4): פרטי העסק.
+function businessTokens(business) {
+  return {
+    שם_עסק: business?.name || "",
+    כתובת_עסק: business?.address || "",
+    טלפון_עסק: business?.phone || "",
+    אימייל_עסק: business?.email || "",
+  };
 }
 
 export function inviteTokens({ business, clientName, appt }) {
@@ -38,8 +62,20 @@ export function inviteTokens({ business, clientName, appt }) {
     תאריך: d.toLocaleDateString("he-IL"),
     שעה: d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }),
     סוג_טיפול: appt.treatmentName || "",
-    שם_עסק: business?.name || "",
-    כתובת_עסק: business?.address || "",
+    ...businessTokens(business),
+  };
+}
+
+// טוקנים להודעת שובר (T-5..T-7). הכלל "בלי מחיר" נשמר: מופיע סכום השובר
+// בלבד — לעולם לא מחיר טיפול, עלות או רווח (T-8).
+export function voucherTokens({ business, recipientName, buyerName, amount, expiryDate }) {
+  return {
+    שם_מקבלת: recipientName || "",
+    שם_קונה: buyerName || "",
+    // מספר מעוצב בלבד, ללא סמל מטבע (T-6)
+    סכום_שובר: (Number(amount) || 0).toLocaleString("he-IL", { maximumFractionDigits: 2 }),
+    תוקף: expiryDate ? new Date(expiryDate).toLocaleDateString("he-IL") : "ללא הגבלת זמן",
+    ...businessTokens(business),
   };
 }
 

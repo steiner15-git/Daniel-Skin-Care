@@ -223,6 +223,9 @@ function IncomeTab({ initialMissing = "" }) {
   const { items: packages } = useCollectionData("clientPackages");
   const { items: products } = useCollectionData("products");
   const productRepo = useRepo("products");
+  // שוברי מתנה (D-3): מחיקת הכנסת שובר מציעה למחוק גם את היתרה שנוצרה ממנה.
+  const { items: credits } = useCollectionData("credits");
+  const creditRepo = useRepo("credits");
   const log = useAuditLog();
   const confirmDialog = useConfirm();
   const toast = useToast();
@@ -297,11 +300,11 @@ function IncomeTab({ initialMissing = "" }) {
     });
   }
 
-  // מחיקת הכנסה משויכת לתור/סדרה/מכירת מוצר עלולה להשאיר "יתום" (ביומן,
-  // בכרטיסיית הלקוחה, או במלאי) אם לא מטופלת במפורש. השאלות ("למחוק גם
-  // את...") נשאלות מיד (דורשות קלט מהמשתמשת ולא ניתנות לדחייה), אבל הביצוע
-  // בפועל נדחה יחד עם שאר ה-Undo — כך שגם מחיקת הכנסה עם רשומות מקושרות
-  // ניתנת לביטול תוך 5 שניות.
+  // מחיקת הכנסה משויכת לתור/סדרה/מכירת מוצר/שובר עלולה להשאיר "יתום" (ביומן,
+  // בכרטיסיית הלקוחה, במלאי, או ביתרת זיכוי) אם לא מטופלת במפורש. השאלות
+  // ("למחוק גם את...") נשאלות מיד (דורשות קלט מהמשתמשת ולא ניתנות לדחייה),
+  // אבל הביצוע בפועל נדחה יחד עם שאר ה-Undo — כך שגם מחיקת הכנסה עם רשומות
+  // מקושרות ניתנת לביטול תוך 5 שניות.
   async function planLinkedRecords(r) {
     if (r.source === "appointment" && r.appointmentId) {
       const alsoDeleteAppt = await confirmDialog({
@@ -344,6 +347,28 @@ function IncomeTab({ initialMissing = "" }) {
       return { restockProduct: alsoRestock ? { id: product.id, qty, currentStock: product.stock ?? 0 } : null };
     }
 
+    // שובר מתנה (addendum שוברים/זיכוי, D-3): היתרה שנוצרה ברכישה נמצאת לפי
+    // incomeId. אם היא כבר נוצלה (חלקית/במלואה) — אזהרה מפורשת, כי מחיקת
+    // ההכנסה אינה מחזירה קיזוזים שכבר בוצעו. אם היתרה כבר נמחקה — ממשיכים
+    // למחיקת ההכנסה בלבד.
+    if (r.source === "voucher") {
+      const credit = credits.find((c) => c.incomeId === r.id);
+      if (!credit) return {};
+      const amount = Number(credit.amount) || 0;
+      const remaining = Number(credit.remaining) || 0;
+      const usedSome = remaining < amount;
+      const question = usedSome
+        ? `השובר כבר נוצל חלקית או במלואו (נותרו ${formatILS(remaining)} מתוך ${formatILS(amount)}). האם למחוק את היתרה מחשבון ${credit.clientName} בכל זאת? תשלומים שכבר קוזזו ממנה יישארו בהיסטוריה.`
+        : `האם למחוק גם את יתרת השובר (${formatILS(amount)}) מחשבון ${credit.clientName}?`;
+      const alsoDeleteCredit = await confirmDialog({
+        title: "מחיקת יתרת שובר משויכת",
+        message: question,
+        confirmLabel: "מחיקה",
+        danger: true,
+      });
+      return { deleteCredit: alsoDeleteCredit ? credit : null };
+    }
+
     return {};
   }
 
@@ -379,6 +404,19 @@ function IncomeTab({ initialMissing = "" }) {
         /* עדכון המלאי נכשל — ההכנסה עדיין תימחק; ניתן לתקן ידנית במסך המוצרים */
       }
     }
+    if (plan.deleteCredit) {
+      const credit = plan.deleteCredit;
+      try {
+        await creditRepo.remove(credit.id);
+        await log({
+          action: "credit_delete",
+          entity: { type: "credit", id: credit.id, desc: `${credit.clientName} — שובר מתנה` },
+          before: { amount: credit.amount, remaining: credit.remaining },
+        });
+      } catch {
+        /* מחיקת היתרה נכשלה — ההכנסה עדיין תימחק; ניתן למחוק את היתרה ידנית בכרטיסיית הלקוחה */
+      }
+    }
   }
 
   async function remove(r) {
@@ -391,7 +429,7 @@ function IncomeTab({ initialMissing = "" }) {
     });
     if (!ok) return;
 
-    // שאלות על רשומות מקושרות (תור/חבילה/מלאי) נשאלות מיד — הן דורשות
+    // שאלות על רשומות מקושרות (תור/חבילה/מלאי/שובר) נשאלות מיד — הן דורשות
     // החלטה מהמשתמשת ולא ניתן לדחות אותן ל-5 השניות של ה-Undo.
     const plan = await planLinkedRecords(r);
 
