@@ -66,19 +66,22 @@ export async function runBackupOnce(uid, withDriveToken, { force = false, curren
 
 export function useAutoBackup() {
   const { user, withDriveToken } = useAuth();
-  // Phase 4 §8 — נרשמים לארבע הקולקציות המגובות דרך המאגר המשותף
+  // Phase 4 §8 — נרשמים לקולקציות המגובות דרך המאגר המשותף
   // (subscribeShared ב-data/firestore.js): אם מסך אחר כבר מנוי על אחת מהן
   // (BottomNav על income, למשל) לא נפתח מנוי Firestore נוסף — רק עוד צרכן
   // לאותו מנוי קיים. כך אפשר לחשב updatedAt מרבי בפועל בלי עלות רשת נוספת
   // מעבר למה שכבר נטען ממילא באפליקציה.
+  // credits נוסף בתוספת שוברי מתנה וזיכוי לקוחה (D-5): חייב להישאר תואם
+  // ל-BACKUP_COLLECTIONS (backupWatermark.js) ול-getAll ב-backup.js.
   const { items: income } = useCollectionData("income");
   const { items: expenses } = useCollectionData("expenses");
   const { items: clients } = useCollectionData("clients");
   const { items: clientPackages } = useCollectionData("clientPackages");
+  const { items: credits } = useCollectionData("credits");
 
   const currentMax = useMemo(
-    () => maxUpdatedAt({ income, expenses, clients, clientPackages }),
-    [income, expenses, clients, clientPackages]
+    () => maxUpdatedAt({ income, expenses, clients, clientPackages, credits }),
+    [income, expenses, clients, clientPackages, credits]
   );
   // ref, לא state: הערך העדכני נדרש בתוך run() שרץ מתוך setTimeout/
   // setInterval שנקבעו פעם אחת ב-mount (תלוי רק ב-user) — closure רגיל

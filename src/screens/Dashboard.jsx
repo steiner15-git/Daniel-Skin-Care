@@ -233,29 +233,17 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* פעולות מהירות */}
+      {/* פעולות מהירות — שישה כפתורים בטבלה של שתי עמודות (H-1..H-3).
+          "אלבום" הוא כפתור רגיל כמו האחרים (כרטיס ה-nav-card הנפרד הוסר). */}
       <h3 className="group-title">פעולות מהירות</h3>
       <div className="quick-actions">
         <button className="btn btn--ghost" onClick={() => navigate("/business/income/new")}>הכנסה</button>
         <button className="btn btn--ghost" onClick={() => navigate("/business/expense/new")}>הוצאה</button>
         <button className="btn btn--ghost" onClick={() => navigate("/series")}>סדרות</button>
         <button className="btn btn--ghost" onClick={() => navigate("/products")}>מוצרים</button>
+        <button className="btn btn--ghost" onClick={() => navigate("/vouchers")}>שוברים</button>
+        <button className="btn btn--ghost" onClick={() => navigate("/album")}>אלבום</button>
       </div>
-
-      <Link to="/album" className="nav-card" style={{ marginTop: 16 }}>
-        <span className="nav-card__icon">
-          <svg viewBox="0 0 24 24" width="22" height="22">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <circle cx="8.5" cy="9" r="1.6" />
-            <path d="M4 18l5-5 4 4 3-3 4 4" />
-          </svg>
-        </span>
-        <div className="nav-card__body">
-          <strong>אלבום תמונות</strong>
-          <span className="muted">כל תמונות הלקוחות · סינון ומיון</span>
-        </div>
-        <span className="nav-card__chev">‹</span>
-      </Link>
     </>
   );
 }

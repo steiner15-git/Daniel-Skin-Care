@@ -63,14 +63,16 @@ async function getAll(uid, name) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-// בונה חוברת Excel עם גיליונות הכנסות / הוצאות / לקוחות (גיבוי קריא, לא JSON).
+// בונה חוברת Excel עם גיליונות הכנסות / הוצאות / לקוחות / חבילות / זיכויים
+// (גיבוי קריא, לא JSON). חייב להישאר תואם ל-BACKUP_COLLECTIONS ב-backupWatermark.js.
 async function buildWorkbookBase64(uid) {
   const XLSX = await import("xlsx");
-  const [income, expenses, clients, packages] = await Promise.all([
+  const [income, expenses, clients, packages, credits] = await Promise.all([
     getAll(uid, "income"),
     getAll(uid, "expenses"),
     getAll(uid, "clients"),
     getAll(uid, "clientPackages"),
+    getAll(uid, "credits"),
   ]);
 
   const wb = XLSX.utils.book_new();
@@ -133,6 +135,21 @@ async function buildWorkbookBase64(uid) {
     ]),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(packageAoa), "חבילות");
+
+  const creditAoa = [
+    ["לקוחה", "סוג", "מתנה מ", "סכום", "יתרה", "בתוקף עד", "סטטוס", "סיבה"],
+    ...credits.map((c) => [
+      c.clientName || "",
+      c.source === "voucher" ? "שובר" : "זיכוי",
+      c.giftFromName || "",
+      Number(c.amount) || 0,
+      Number(c.remaining) || 0,
+      c.expiryDate || "",
+      c.status || "",
+      c.reason || "",
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(creditAoa), "זיכויים");
 
   const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
   const bytes = new Uint8Array(buf);

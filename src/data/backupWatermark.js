@@ -1,7 +1,7 @@
 // Phase 4 §8 — "גיבוי חכם": במקום דגל בוליאני שמסומן בכל כתיבה (הגישה
 // הקודמת, שהוחלפה כאן), עוקבים אחר updatedAt המרבי בפועל מתוך הרשומות
 // שכבר טעונות בזיכרון בקולקציות המגובות (BACKUP_COLLECTIONS — חייב להישאר
-// תואם ל-4 קריאות ה-getAll ב-data/backup.js), ומשווים לחותמת (watermark)
+// תואם לקריאות ה-getAll ב-data/backup.js), ומשווים לחותמת (watermark)
 // של הגיבוי המוצלח האחרון. כך גם עדכון שמגיע ממקור אחר (למשל תיקון ידני
 // ישיר ב-Firestore Console) מזוהה נכון — לא רק כתיבות שעברו דרך ה-repo.
 //
@@ -10,7 +10,10 @@
 
 const WATERMARK_KEY = "dsc:driveBackupWatermark";
 
-export const BACKUP_COLLECTIONS = ["income", "expenses", "clients", "clientPackages"];
+// credits (שוברים/זיכויים) נוסף בתוספת "שוברי מתנה וזיכוי לקוחה" (D-5) — חייב
+// להישאר תואם ל-getAll בגיליון "זיכויים" ב-backup.js, ול-useCollectionData
+// ב-useAutoBackup.js.
+export const BACKUP_COLLECTIONS = ["income", "expenses", "clients", "clientPackages", "credits"];
 
 // ממיר updatedAt (יכול להיות Firestore Timestamp בענן, או מספר Date.now()
 // במצב מקומי) למספר מילישניות להשוואה אחידה.
@@ -24,8 +27,8 @@ function toMillis(updatedAt) {
 
 // updatedAt המרבי בפועל מתוך כל הרשומות שכבר נטענו בכל קולקציה מגובה.
 // collectionsByName: { income: [...], expenses: [...], clients: [...],
-// clientPackages: [...] } — כפי שמתקבל מ-useCollectionData בכל אחת מהן
-// (ראו useAutoBackup.js).
+// clientPackages: [...], credits: [...] } — כפי שמתקבל מ-useCollectionData
+// בכל אחת מהן (ראו useAutoBackup.js).
 export function maxUpdatedAt(collectionsByName) {
   let max = 0;
   for (const name of BACKUP_COLLECTIONS) {

@@ -1,11 +1,19 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
+import CreditOffsetField from "../components/CreditOffsetField";
 import { useCollectionData, useBatchRepo, useSettingDoc, useAuditLog } from "../data";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
 import { dateInputValue } from "../utils/datetime";
+import {
+  creditBalance,
+  allocateCredit,
+  resolveOffset,
+  round2,
+  creditLabel,
+} from "../utils/credits";
 
 export default function ProductSell() {
   const { id } = useParams();
@@ -15,6 +23,8 @@ export default function ProductSell() {
 
   const { items: products, loading } = useCollectionData("products");
   const { items: clients } = useCollectionData("clients");
+  // יתרות זיכוי (שוברי מתנה + זיכוי לקוחה) — לקיזוז במכירה (O-13), רק כשנבחרה לקוחה.
+  const { items: credits } = useCollectionData("credits");
   // כתיבת ה-income ועדכון המלאי מבוצעים יחד באטומיות (writeBatch) דרך
   // useBatchRepo — ראו הערת התיעוד ב-data/firestore.js. לפני כן היו אלה שתי
   // קריאות repo נפרדות (incomeRepo.add + productRepo.update); כשל רשת בין
@@ -36,6 +46,8 @@ export default function ProductSell() {
   const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
+  // קיזוז מיתרה: null = ברירת מחדל (הנמוך מבין היתרה לסכום); מחרוזת = הוקלד.
+  const [offset, setOffset] = useState(null);
 
   const filteredClients = useMemo(() => {
     const term = clientQuery.trim();
@@ -55,48 +67,86 @@ export default function ProductSell() {
   const stock = p.stock ?? 0;
   const qtyNum = Number(qty) || 0;
   const amountVal = amount == null ? (Number(p.price) || 0) * qtyNum : amount;
+  const amountNum = Math.max(0, Number(amountVal) || 0);
   const outOfStock = stock <= 0;
   const qtyInvalid = qtyNum < 1 || qtyNum > stock;
 
+  // קיזוז מיתרת זיכוי (O-1..O-5, O-13): רק ללקוחה שנבחרה מהרשימה. ההכנסה
+  // נרשמת רק על החלק ששולם בפועל. סטייה מכוונת מ-O-6 (הוחלט במפורש): בכיסוי
+  // מלא נוצרת הכנסה בסכום 0 עם paid:true, כדי שהמכירה תמשיך להופיע בטאב
+  // "מכירות" ובטאב "מוצרים" בכרטיסיית הלקוחה (שניהם נשענים על רשומת הכנסה
+  // עם source:"product"), ושמחיקתה תציע החזרה למלאי כרגיל. אמצעי תשלום אינו
+  // נדרש בכיסוי מלא.
+  const balance = clientId ? creditBalance(credits, clientId) : 0;
+  const offsetVal = resolveOffset(offset, balance, amountNum);
+  const cashAmount = round2(amountNum - offsetVal);
+  const fullyCovered = offsetVal > 0 && cashAmount <= 0;
+
   // עוטפים ב-try/catch: אם ה-batch כולו נכשל (רשת/quota), המשתמשת מקבלת
   // הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר תקוע עם כפתור
-  // disabled בלי משוב. בזכות ה-batch, אין עוד מצב-ביניים אפשרי: או ששתי
-  // הפעולות (הכנסה + ניכוי מלאי) הצליחו יחד, או ששתיהן לא נכתבו כלל.
+  // disabled בלי משוב. בזכות ה-batch, אין עוד מצב-ביניים אפשרי: או שכל
+  // הפעולות (הכנסה + ניכוי מלאי + ירידת יתרה) הצליחו יחד, או שאף אחת לא נכתבה.
   async function confirmSale() {
     setSaving(true);
+    const allocations = offsetVal > 0 ? allocateCredit(credits, clientId, offsetVal) : [];
+    const incomeId = batchRepo.newId("income");
     try {
-      const incomeId = batchRepo.newId("income");
-      await batchRepo.commit([
-        {
-          name: "income",
-          id: incomeId,
-          type: "add",
-          data: {
-            source: "product",
-            productId: p.id,
-            quantity: qtyNum,
-            // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
-            // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
-            // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
-            clientId: clientId || null,
-            clientName,
-            treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
-            note: "מכירת מוצר",
-            // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0.
-            amount: Math.max(0, Number(amountVal) || 0),
-            date,
-            invoiceNumber: "",
-            paymentMethod,
-            paid,
-          },
+      const ops = allocations.map(({ credit, remainingAfter }) => ({
+        name: "credits",
+        id: credit.id,
+        type: "update",
+        data: {
+          remaining: remainingAfter,
+          status: remainingAfter <= 0 ? "used" : "active",
         },
-        {
-          name: "products",
-          id: p.id,
-          type: "update",
-          data: { stock: Math.max(0, stock - qtyNum) },
+      }));
+      ops.push({
+        name: "income",
+        id: incomeId,
+        type: "add",
+        data: {
+          source: "product",
+          productId: p.id,
+          quantity: qtyNum,
+          // clientId נשמר כאן (בנוסף ל-clientName) כדי שטאב "מוצרים" בכרטיסיית
+          // הלקוחה (addendum #15) וקישור הלקוחה בטאב "מכירות" (addendum #14)
+          // יוכלו לשייך את המכירה בוודאות, ולא רק לפי התאמת שם טקסטואלית.
+          clientId: clientId || null,
+          clientName,
+          treatmentName: qtyNum > 1 ? `${p.name} ×${qtyNum}` : p.name,
+          note: "מכירת מוצר",
+          // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
+          // שלילי (הקלדה בטעות) נעצר ב-0.
+          amount: cashAmount,
+          date,
+          invoiceNumber: "",
+          paymentMethod: fullyCovered ? "" : paymentMethod,
+          // בכיסוי מלא ההכנסה בסכום 0 מסומנת "שולם" — כדי שלא תיספר כתשלום
+          // שטרם אומת (תזכורת/באדג' "הכנסות לא מאומתות").
+          paid: fullyCovered ? true : paid,
+          ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
         },
-      ]);
+      });
+      ops.push({
+        name: "products",
+        id: p.id,
+        type: "update",
+        data: { stock: Math.max(0, stock - qtyNum) },
+      });
+      await batchRepo.commit(ops);
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "המכירה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
+
+    // לוגים אחרי שה-commit הצליח — כשל בלוג לא אמור להציג "המכירה נכשלה"
+    // כשהמכירה כבר נרשמה בפועל, ולכן נבלע (נרשם ל-console).
+    try {
       await log({
         action: "product_sale",
         entity: {
@@ -106,14 +156,20 @@ export default function ProductSell() {
         },
         after: { incomeId },
       });
+      for (const { credit, remainingAfter } of allocations) {
+        await log({
+          action: "credit_apply",
+          entity: {
+            type: "credit",
+            id: credit.id,
+            desc: `${clientName} — ${creditLabel(credit)} · מכירת ${p.name}`,
+          },
+          before: { remaining: credit.remaining },
+          after: { remaining: remainingAfter },
+        });
+      }
     } catch (e) {
-      setSaving(false);
-      await confirmDialog({
-        title: "שגיאה",
-        message: "המכירה נכשלה: " + (e?.message || e),
-        alertOnly: true,
-      });
-      return;
+      console.error("[audit] product sale log failed", e);
     }
     navigate(backTo);
   }
@@ -155,6 +211,7 @@ export default function ProductSell() {
               onClick={() => {
                 setClientId("");
                 setClientName("");
+                setOffset(null);
               }}
             >
               שינוי
@@ -231,7 +288,7 @@ export default function ProductSell() {
           </p>
         )}
         <div className="field" style={{ marginBottom: 0 }}>
-          <label>אמצעי תשלום</label>
+          <label>אמצעי תשלום{fullyCovered ? " (לא נדרש — הסכום מכוסה מהיתרה)" : ""}</label>
           <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
             <option value="">— בחרי —</option>
             {methods.map((m) => (
@@ -241,20 +298,34 @@ export default function ProductSell() {
             ))}
           </select>
         </div>
-        <label className="inline-check" style={{ marginTop: 14 }}>
-          <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
-          <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
-        </label>
+
+        <CreditOffsetField
+          balance={balance}
+          amount={amountNum}
+          offset={offset}
+          setOffset={setOffset}
+        />
+
+        {!fullyCovered && (
+          <label className="inline-check" style={{ marginTop: 14 }}>
+            <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
+            <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
+          </label>
+        )}
       </div>
 
       <div className="notice">
-        המכירה תיצור רשומת הכנסה של {formatILS(amountVal)} ותנכה {qtyNum > 1 ? `${qtyNum} יחידות` : "יחידה אחת"} מהמלאי.
+        {fullyCovered
+          ? `הסכום מכוסה במלואו מיתרת הזיכוי — תיווצר רשומת הכנסה בסכום ₪0 (לתיעוד המכירה בלבד; השובר/הזיכוי כבר נרשמו קודם). המכירה תנכה ${formatILS(offsetVal)} מהיתרה ו${qtyNum > 1 ? `${qtyNum} יחידות` : "יחידה אחת"} מהמלאי.`
+          : `המכירה תיצור רשומת הכנסה של ${formatILS(cashAmount)}${
+              offsetVal > 0 ? ` (בנוסף לקיזוז של ${formatILS(offsetVal)} מהיתרה)` : ""
+            } ותנכה ${qtyNum > 1 ? `${qtyNum} יחידות` : "יחידה אחת"} מהמלאי.`}
       </div>
 
       <div className="save-row">
         <button
           className="btn"
-          disabled={saving || outOfStock || qtyInvalid || !paymentMethod}
+          disabled={saving || outOfStock || qtyInvalid || (!paymentMethod && !fullyCovered)}
           onClick={confirmSale}
         >
           {saving ? "שומרת…" : "אישור מכירה"}

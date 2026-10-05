@@ -1,11 +1,19 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
+import CreditOffsetField from "../components/CreditOffsetField";
 import { useCollectionData, useBatchRepo, useSettingDoc, useAuditLog } from "../data";
 import { useConfirm } from "../context/ConfirmDialogProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
 import { dateInputValue } from "../utils/datetime";
+import {
+  creditBalance,
+  allocateCredit,
+  resolveOffset,
+  round2,
+  creditLabel,
+} from "../utils/credits";
 
 export default function SeriesPurchase() {
   const { id } = useParams();
@@ -15,6 +23,8 @@ export default function SeriesPurchase() {
 
   const { items: series, loading } = useCollectionData("series");
   const { items: clients } = useCollectionData("clients");
+  // יתרות זיכוי (שוברי מתנה + זיכוי לקוחה) — לקיזוז ברכישה (O-12).
+  const { items: credits } = useCollectionData("credits");
   // כתיבת ה-income ויצירת ה-clientPackage מבוצעות יחד באטומיות (writeBatch)
   // דרך useBatchRepo — ראו הערת התיעוד ב-data/firestore.js. לפני כן היו אלה
   // שתי קריאות repo נפרדות (incomeRepo.add + packageRepo.add); כשל רשת בין
@@ -35,6 +45,8 @@ export default function SeriesPurchase() {
   const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
+  // קיזוז מיתרה: null = ברירת מחדל (הנמוך מבין היתרה לסכום); מחרוזת = הוקלד.
+  const [offset, setOffset] = useState(null);
 
   const filteredClients = useMemo(() => {
     const term = clientQuery.trim();
@@ -52,18 +64,36 @@ export default function SeriesPurchase() {
     );
 
   const amountVal = amount == null ? s.price ?? 0 : amount;
+  const amountNum = Math.max(0, Number(amountVal) || 0);
+
+  // קיזוז מיתרת זיכוי (O-1..O-6, O-12): ההכנסה נרשמת רק על החלק ששולם בפועל;
+  // בכיסוי מלא לא נוצרת הכנסה, ו-incomeId על החבילה נשאר ריק.
+  const balance = clientId ? creditBalance(credits, clientId) : 0;
+  const offsetVal = resolveOffset(offset, balance, amountNum);
+  const cashAmount = round2(amountNum - offsetVal);
+  const fullyCovered = offsetVal > 0 && cashAmount <= 0;
 
   // עוטפים ב-try/catch: אם ה-batch כולו נכשל (רשת/quota), המשתמשת מקבלת
   // הודעת שגיאה מפורשת ו-"saving" משתחרר, במקום שהמסך יישאר תקוע. בזכות
-  // ה-batch, אין עוד מצב-ביניים אפשרי: או ששתי הפעולות (הכנסה + חבילת
-  // לקוחה) הצליחו יחד, או ששתיהן לא נכתבו כלל.
+  // ה-batch, אין עוד מצב-ביניים אפשרי: או שכל הפעולות (הכנסה + חבילת
+  // לקוחה + ירידת יתרה) הצליחו יחד, או שאף אחת לא נכתבה.
   async function confirmPurchase() {
     setSaving(true);
+    const allocations = offsetVal > 0 ? allocateCredit(credits, clientId, offsetVal) : [];
+    const packageId = batchRepo.newId("clientPackages");
+    const incomeId = fullyCovered ? null : batchRepo.newId("income");
     try {
-      const incomeId = batchRepo.newId("income");
-      const packageId = batchRepo.newId("clientPackages");
-      await batchRepo.commit([
-        {
+      const ops = allocations.map(({ credit, remainingAfter }) => ({
+        name: "credits",
+        id: credit.id,
+        type: "update",
+        data: {
+          remaining: remainingAfter,
+          status: remainingAfter <= 0 ? "used" : "active",
+        },
+      }));
+      if (!fullyCovered) {
+        ops.push({
           name: "income",
           id: incomeId,
           type: "add",
@@ -80,38 +110,39 @@ export default function SeriesPurchase() {
             clientId: clientId || null,
             clientName,
             treatmentName: s.name,
-            // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0.
-            amount: Math.max(0, Number(amountVal) || 0),
+            // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
+            // שלילי (הקלדה בטעות) נעצר ב-0.
+            amount: cashAmount,
             date,
             invoiceNumber: "",
             paymentMethod,
             paid,
+            ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
           },
+        });
+      }
+      ops.push({
+        name: "clientPackages",
+        id: packageId,
+        type: "add",
+        data: {
+          clientId,
+          clientName,
+          seriesId: s.id,
+          seriesName: s.name,
+          treatmentIds: s.treatmentIds || (s.treatmentId ? [s.treatmentId] : []),
+          treatmentName: s.treatmentName,
+          totalSessions: Number(s.sessions) || 0,
+          remainingSessions: Number(s.sessions) || 0,
+          purchaseDate: date,
+          expiryDate: s.expiryDate || null,
+          // בכיסוי מלא מיתרה אין הכנסה — incomeId ריק (O-12)
+          incomeId,
+          status: "active",
+          ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
         },
-        {
-          name: "clientPackages",
-          id: packageId,
-          type: "add",
-          data: {
-            clientId,
-            clientName,
-            seriesId: s.id,
-            seriesName: s.name,
-            treatmentIds: s.treatmentIds || (s.treatmentId ? [s.treatmentId] : []),
-            treatmentName: s.treatmentName,
-            totalSessions: Number(s.sessions) || 0,
-            remainingSessions: Number(s.sessions) || 0,
-            purchaseDate: date,
-            expiryDate: s.expiryDate || null,
-            incomeId,
-            status: "active",
-          },
-        },
-      ]);
-      await log({
-        action: "series_purchase",
-        entity: { type: "clientPackage", id: packageId, desc: `${clientName} — ${s.name}` },
       });
+      await batchRepo.commit(ops);
     } catch (e) {
       setSaving(false);
       await confirmDialog({
@@ -120,6 +151,29 @@ export default function SeriesPurchase() {
         alertOnly: true,
       });
       return;
+    }
+
+    // לוגים אחרי שה-commit הצליח — כשל בלוג לא אמור להציג "הרכישה נכשלה"
+    // כשהרכישה כבר נרשמה בפועל, ולכן נבלע (נרשם ל-console).
+    try {
+      await log({
+        action: "series_purchase",
+        entity: { type: "clientPackage", id: packageId, desc: `${clientName} — ${s.name}` },
+      });
+      for (const { credit, remainingAfter } of allocations) {
+        await log({
+          action: "credit_apply",
+          entity: {
+            type: "credit",
+            id: credit.id,
+            desc: `${clientName} — ${creditLabel(credit)} · רכישת ${s.name}`,
+          },
+          before: { remaining: credit.remaining },
+          after: { remaining: remainingAfter },
+        });
+      }
+    } catch (e) {
+      console.error("[audit] series purchase log failed", e);
     }
     navigate(backTo);
   }
@@ -165,6 +219,7 @@ export default function SeriesPurchase() {
               onClick={() => {
                 setClientId("");
                 setClientName("");
+                setOffset(null);
               }}
             >
               שינוי
@@ -222,7 +277,7 @@ export default function SeriesPurchase() {
           </div>
         </div>
         <div className="field" style={{ marginBottom: 0 }}>
-          <label>אמצעי תשלום</label>
+          <label>אמצעי תשלום{fullyCovered ? " (לא נדרש — הסכום מכוסה מהיתרה)" : ""}</label>
           <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
             <option value="">— בחרי —</option>
             {methods.map((m) => (
@@ -232,20 +287,34 @@ export default function SeriesPurchase() {
             ))}
           </select>
         </div>
-        <label className="inline-check" style={{ marginTop: 14 }}>
-          <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
-          <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
-        </label>
+
+        <CreditOffsetField
+          balance={balance}
+          amount={amountNum}
+          offset={offset}
+          setOffset={setOffset}
+        />
+
+        {!fullyCovered && (
+          <label className="inline-check" style={{ marginTop: 14 }}>
+            <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
+            <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
+          </label>
+        )}
       </div>
 
       <div className="notice">
-        הרכישה תיצור רשומת הכנסה של {formatILS(amountVal)} וחבילת לקוחה עם {s.sessions} מפגשים.
+        {fullyCovered
+          ? `הסכום מכוסה במלואו מיתרת הזיכוי — לא תיווצר הכנסה חדשה (השובר/הזיכוי כבר נרשמו קודם). הרכישה תנכה ${formatILS(offsetVal)} מהיתרה ותיצור חבילת לקוחה עם ${s.sessions} מפגשים.`
+          : `הרכישה תיצור רשומת הכנסה של ${formatILS(cashAmount)}${
+              offsetVal > 0 ? ` (בנוסף לקיזוז של ${formatILS(offsetVal)} מהיתרה)` : ""
+            } וחבילת לקוחה עם ${s.sessions} מפגשים.`}
       </div>
 
       <div className="save-row">
         <button
           className="btn"
-          disabled={saving || !clientId || !paymentMethod}
+          disabled={saving || !clientId || (!paymentMethod && !fullyCovered)}
           onClick={confirmPurchase}
         >
           {saving ? "שומרת…" : "אישור רכישה"}

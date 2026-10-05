@@ -30,6 +30,9 @@ import Products from "./screens/Products";
 import ProductSell from "./screens/ProductSell";
 import Series from "./screens/Series";
 import SeriesPurchase from "./screens/SeriesPurchase";
+import Vouchers from "./screens/Vouchers";
+import VoucherPurchase from "./screens/VoucherPurchase";
+import SendVoucher from "./screens/SendVoucher";
 import SettingsHome from "./screens/settings/SettingsHome";
 import BusinessDetails from "./screens/settings/BusinessDetails";
 import Treatments from "./screens/settings/Treatments";
@@ -95,8 +98,11 @@ export default function App() {
               <Route path="products" element={<Products />} />
               <Route path="products/:id/sell" element={<ProductSell />} />
               <Route path="series" element={<Series />} />
-              <Route 
-path="series/:id/purchase" element={<SeriesPurchase />} />
+              <Route path="series/:id/purchase" element={<SeriesPurchase />} />
+              <Route path="vouchers" element={<Vouchers />} />
+              <Route path="vouchers/purchase" element={<VoucherPurchase />} />
+              <Route path="vouchers/:id/purchase" element={<VoucherPurchase />} />
+              <Route path="vouchers/:creditId/send" element={<SendVoucher />} />
               <Route path="settings" element={<SettingsHome />} />
               <Route path="settings/business" element={<BusinessDetails />} />
               <Route path="settings/treatments" element={<Treatments />} />

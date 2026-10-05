@@ -1,11 +1,19 @@
 import { useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
+import CreditOffsetField from "../../components/CreditOffsetField";
 import { useCollectionData, useRepo, useBatchRepo, useSettingDoc, useAuditLog } from "../../data";
 import { formatDateTime, dateInputValue } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { CANCEL_REASONS, CANCEL_REASON_LABELS } from "../../utils/cancellations";
+import {
+  creditBalance,
+  allocateCredit,
+  resolveOffset,
+  round2,
+  creditLabel,
+} from "../../utils/credits";
 
 export default function CloseAppointment() {
   const { id } = useParams();
@@ -14,6 +22,8 @@ export default function CloseAppointment() {
   const backTo = location.state?.from === "dashboard" ? "/" : "/calendar";
   const { items: appts, loading } = useCollectionData("appointments");
   const { items: packages } = useCollectionData("clientPackages");
+  // יתרות זיכוי (שוברי מתנה + זיכוי לקוחה) — לקיזוז במסלול ההכנסה הרגיל בלבד.
+  const { items: credits } = useCollectionData("credits");
   // apptRepo נשאר בשימוש רק לביטול תור (כתיבה בודדת, לא זקוקה ל-batch).
   // שני מסלולי הסגירה עצמם (חיוב מחבילה / הכנסה רגילה) עברו ל-useBatchRepo
   // (Phase 4 §2) — ראו הערה מפורטת ליד confirmFromPackage/confirmDone למטה.
@@ -30,6 +40,8 @@ export default function CloseAppointment() {
   const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
+  // קיזוז מיתרה: null = ברירת מחדל (הנמוך מבין היתרה לסכום); מחרוזת = הוקלד.
+  const [offset, setOffset] = useState(null);
 
   if (loading) return <p className="muted">טוען…</p>;
   if (!appt)
@@ -41,6 +53,15 @@ export default function CloseAppointment() {
     );
 
   const amountVal = amount == null ? appt.price ?? 0 : amount;
+  const amountNum = Math.max(0, Number(amountVal) || 0);
+
+  // קיזוז מיתרת זיכוי (O-1..O-6): רק ללקוחה עם clientId (מזדמנת — אין קיזוז).
+  // ההכנסה נרשמת רק על החלק ששולם בפועל; כיסוי מלא = ללא הכנסה וללא חובת
+  // אמצעי תשלום.
+  const balance = appt.clientId ? creditBalance(credits, appt.clientId) : 0;
+  const offsetVal = resolveOffset(offset, balance, amountNum);
+  const cashAmount = round2(amountNum - offsetVal);
+  const fullyCovered = offsetVal > 0 && cashAmount <= 0;
 
   const pkg = appt.clientPackageId ? packages.find((p) => p.id === appt.clientPackageId) : null;
   // תוקן QA (2026-09): הבחנה בין "החבילה נמחקה" (pkg === undefined, למרות
@@ -63,6 +84,7 @@ export default function CloseAppointment() {
   // ללא דרך לזהות/לתקן זאת אוטומטית. writeBatch מבטיח ששתי הכתיבות
   // מצליחות יחד או נכשלות יחד — אותו דפוס בדיוק כמו ב-SeriesPurchase.jsx
   // ו-ProductSell.jsx (ראו הערת התיעוד ב-data/firestore.js).
+  // מסלול החיבור מחבילה אינו משתנה בתוספת הקיזוז (O-11).
   async function confirmFromPackage() {
     setSaving(true);
     const remaining = (pkg.remainingSessions ?? 0) - 1;
@@ -112,12 +134,26 @@ export default function CloseAppointment() {
   // תור שנשאר "ממתין לסגירה" בעוד שהכנסה כבר נוצרה. עברו יחד ל-writeBatch
   // דרך useBatchRepo — מזהה ההכנסה נוצר מראש עם batchRepo.newId() כדי
   // שאפשר יהיה לכתוב אותו כ-incomeId על רשומת התור באותו batch.
+  //
+  // קיזוז מיתרה (O-7): ירידת remaining ביתרות שנוצלו, יצירת ההכנסה (רק על
+  // החלק ששולם בפועל, ובכיסוי מלא — לא נוצרת כלל) ועדכון התור — הכול
+  // ב-commit אחד. כשל: הודעת שגיאה ו-saving משתחרר, והיתרה לא ירדה.
   async function confirmDone() {
     setSaving(true);
+    const allocations = offsetVal > 0 ? allocateCredit(credits, appt.clientId, offsetVal) : [];
     try {
-      const incomeId = batchRepo.newId("income");
-      await batchRepo.commit([
-        {
+      const incomeId = fullyCovered ? null : batchRepo.newId("income");
+      const ops = allocations.map(({ credit, remainingAfter }) => ({
+        name: "credits",
+        id: credit.id,
+        type: "update",
+        data: {
+          remaining: remainingAfter,
+          status: remainingAfter <= 0 ? "used" : "active",
+        },
+      }));
+      if (!fullyCovered) {
+        ops.push({
           name: "income",
           id: incomeId,
           type: "add",
@@ -132,28 +168,34 @@ export default function CloseAppointment() {
             clientId: appt.clientId || null,
             clientName: appt.clientName || "",
             treatmentName: appt.treatmentName || "",
-            // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0.
-            amount: Math.max(0, Number(amountVal) || 0),
+            // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
+            // שלילי (הקלדה בטעות) נעצר ב-0 (resolveOffset/amountNum).
+            amount: cashAmount,
             date,
             invoiceNumber: "",
             paymentMethod,
             paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
+            ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
           },
+        });
+      }
+      ops.push({
+        name: "appointments",
+        id: appt.id,
+        type: "update",
+        data: {
+          status: "done",
+          incomeId,
+          paymentMethod: fullyCovered ? "" : paymentMethod,
+          // החבילה פקעה/נגמרה/נמחקה — התור חויב רגיל, מנתקים את הקישור לחבילה
+          clientPackageId: null,
+          chargedFromPackage: false,
+          // true רק כשהקיזוז כיסה את כל הסכום ולא נוצרה הכנסה (D-1/D-2)
+          chargedFromCredit: fullyCovered,
+          ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
         },
-        {
-          name: "appointments",
-          id: appt.id,
-          type: "update",
-          data: {
-            status: "done",
-            incomeId,
-            paymentMethod,
-            // החבילה פקעה/נגמרה/נמחקה — התור חויב רגיל, מנתקים את הקישור לחבילה
-            clientPackageId: null,
-            chargedFromPackage: false,
-          },
-        },
-      ]);
+      });
+      await batchRepo.commit(ops);
     } catch (e) {
       setSaving(false);
       await confirmDialog({
@@ -162,6 +204,25 @@ export default function CloseAppointment() {
         alertOnly: true,
       });
       return;
+    }
+
+    // לוג קיזוז (O-10) — אחרי שה-commit הצליח. כשל בלוג לא אמור להציג
+    // "הביצוע נכשל" כשהתור כבר נסגר בפועל, ולכן נבלע (נרשם ל-console).
+    for (const { credit, remainingAfter } of allocations) {
+      try {
+        await log({
+          action: "credit_apply",
+          entity: {
+            type: "credit",
+            id: credit.id,
+            desc: `${appt.clientName} — ${creditLabel(credit)} · ${appt.treatmentName || "תור"}`,
+          },
+          before: { remaining: credit.remaining },
+          after: { remaining: remainingAfter },
+        });
+      } catch (e) {
+        console.error("[audit] credit_apply failed", e);
+      }
     }
     navigate(backTo);
   }
@@ -273,7 +334,7 @@ export default function CloseAppointment() {
               </div>
             </div>
             <div className="field" style={{ marginBottom: 0 }}>
-              <label>אמצעי תשלום</label>
+              <label>אמצעי תשלום{fullyCovered ? " (לא נדרש — הסכום מכוסה מהיתרה)" : ""}</label>
               <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
                 <option value="">— בחרי —</option>
                 {methods.map((m) => (
@@ -282,23 +343,39 @@ export default function CloseAppointment() {
               </select>
             </div>
 
-            <label className="inline-check" style={{ marginTop: 14 }}>
-              <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
-              <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
-            </label>
+            <CreditOffsetField
+              balance={balance}
+              amount={amountNum}
+              offset={offset}
+              setOffset={setOffset}
+            />
+
+            {!fullyCovered && (
+              <label className="inline-check" style={{ marginTop: 14 }}>
+                <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
+                <span>סומן כשולם (אפשר לאשר גם מאוחר יותר במסך ההכנסות)</span>
+              </label>
+            )}
           </div>
 
           <div className="notice">
-            אישור ביצוע ייצור רשומת הכנסה של {formatILS(amountVal)} המשויכת לתור. אישור התשלום
-            ("שולם") נעשה על ידך — כאן או מאוחר יותר. לאחר האישור עריכת התור תינעל.
+            {fullyCovered
+              ? `הסכום מכוסה במלואו מיתרת הזיכוי — לא תיווצר הכנסה חדשה (השובר/הזיכוי כבר נרשמו קודם). אישור הביצוע ינכה ${formatILS(offsetVal)} מהיתרה, ועריכת התור תינעל.`
+              : `אישור ביצוע ייצור רשומת הכנסה של ${formatILS(cashAmount)} המשויכת לתור${
+                  offsetVal > 0 ? ` (בנוסף לקיזוז של ${formatILS(offsetVal)} מהיתרה)` : ""
+                }. אישור התשלום ("שולם") נעשה על ידך — כאן או מאוחר יותר. לאחר האישור עריכת התור תינעל.`}
           </div>
 
           <div className="save-row" style={{ justifyContent: "space-between" }}>
             <button className="btn btn--danger" onClick={cancelAppt}>
               ביטול תור (לא בוצע)
             </button>
-            <button className="btn" disabled={saving || !paymentMethod} onClick={confirmDone}>
-              {saving ? "שומרת…" : "אישור ויצירת הכנסה"}
+            <button
+              className="btn"
+              disabled={saving || (!paymentMethod && !fullyCovered)}
+              onClick={confirmDone}
+            >
+              {saving ? "שומרת…" : fullyCovered ? "אישור וקיזוז מהיתרה" : "אישור ויצירת הכנסה"}
             </button>
           </div>
         </>
