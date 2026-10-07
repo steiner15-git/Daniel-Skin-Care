@@ -28,6 +28,7 @@ const ACTION_LABELS = {
   credit_edit: "עריכת זיכוי",
   credit_delete: "מחיקת זיכוי",
   credit_apply: "קיזוז מיתרת זיכוי",
+  credit_restore: "החזרת יתרת זיכוי",
 };
 
 const CURRENT_YEAR = new Date().getFullYear();

@@ -124,7 +124,17 @@ export default function ProductSell() {
           // בכיסוי מלא ההכנסה בסכום 0 מסומנת "שולם" — כדי שלא תיספר כתשלום
           // שטרם אומת (תזכורת/באדג' "הכנסות לא מאומתות").
           paid: fullyCovered ? true : paid,
-          ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
+          // creditApplications: פירוט לאילו יתרות נוצל הקיזוז — נדרש להחזרת
+          // היתרה במחיקת ההכנסה (Business.jsx).
+          ...(offsetVal > 0
+            ? {
+                creditApplied: offsetVal,
+                creditApplications: allocations.map(({ credit, take }) => ({
+                  creditId: credit.id,
+                  amount: take,
+                })),
+              }
+            : {}),
         },
       });
       ops.push({
