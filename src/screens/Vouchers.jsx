@@ -188,7 +188,7 @@ function DefinitionsTab() {
 
       {adding ? (
         <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 16, marginBottom: 12 }}>הוספת הגדרת שובר</h3>
+          <h3 style={{ fontSize: 16, marginBottom: 12 }}>הוספת שובר</h3>
           <VoucherFields
             d={draft}
             setD={setDraft}

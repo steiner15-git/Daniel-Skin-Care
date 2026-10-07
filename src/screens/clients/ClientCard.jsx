@@ -172,7 +172,7 @@ export default function ClientCard() {
       )}
 
       {tab === "appointments" && (
-        <AppointmentsTab appts={appts} clientId={id} clientName={fullName(client)} />
+        <AppointmentsTab appts={appts} clientId={id} />
       )}
 
       {tab === "products" && <ProductsTab clientId={id} />}
@@ -354,6 +354,8 @@ function DetailsTab({
         </div>
       )}
 
+      <CreditsSection clientId={id} clientName={fullName(client)} />
+
       <div className="save-row" style={{ marginTop: 16 }}>
         <button className="btn btn--muted" onClick={onArchive}>
           שליחה לארכיון
@@ -366,7 +368,7 @@ function DetailsTab({
   );
 }
 
-function AppointmentsTab({ appts, clientId, clientName }) {
+function AppointmentsTab({ appts, clientId }) {
   const { items: packages } = useCollectionData("clientPackages");
   const { items: income } = useCollectionData("income");
 
@@ -410,8 +412,6 @@ function AppointmentsTab({ appts, clientId, clientName }) {
 
   return (
     <>
-      <CreditsSection clientId={clientId} clientName={clientName} />
-
       <PackagesSection packages={myPackages} incomeById={incomeById} />
 
       {cancelStats.cancelledCount > 0 && (
@@ -503,10 +503,10 @@ function packageState(p) {
 }
 
 // ---------- יתרת זיכוי (addendum שוברים/זיכוי, C-1..C-8) ----------
-// אזור "יתרת זיכוי" בטאב "רשימת תורים", מעל פס החבילות: סה"כ יתרה זמינה,
-// רשימת היתרות (שוברי מתנה שהתקבלו + זיכויים רגילים), הוספת זיכוי ידני
-// (ללא הכנסה — הכסף כבר נרשם קודם), ועריכה/מחיקה (CRUD). האזור מוצג תמיד
-// (בקומפקטיות כשאין יתרות), כי הוא נקודת הכניסה היחידה ליצירת זיכוי רגיל.
+// אזור "יתרת זיכוי" בטאב "פרטי לקוחה", בסוף הטאב (אחרי "לקוחות שהופנו", לפני
+// שורת הפעולות): סה"כ יתרה זמינה, רשימת היתרות (שוברי מתנה שהתקבלו +
+// זיכויים רגילים), הוספת זיכוי ידני (ללא הכנסה — הכסף כבר נרשם קודם), ועריכה/
+// מחיקה (CRUD). האזור מוצג תמיד, גם ביתרה 0.
 // כל הסכומים מסומנים .sensitive (מצב קליניקה).
 const CREDIT_STATE_ORDER = { active: 0, expired: 1, used: 2 };
 
@@ -538,7 +538,6 @@ function CreditsSection({ clientId, clientName }) {
     [allCredits, clientId, hiddenIds]
   );
   const balance = creditBalance(mine, clientId);
-
   // כשל בכתיבת הלוג אחרי שהפעולה עצמה הצליחה לא אמור להציג "הפעולה נכשלה".
   async function safeLog(entry) {
     try {
@@ -663,7 +662,7 @@ function CreditsSection({ clientId, clientName }) {
   }
 
   return (
-    <div className="card" style={{ marginBottom: 8 }}>
+    <div className="card" style={{ marginTop: 16 }}>
       <div className="card-head" style={{ marginBottom: mine.length > 0 || adding ? 8 : 0 }}>
         <h3>יתרת זיכוי</h3>
         <strong className="sensitive">{formatILS(balance)}</strong>

@@ -135,14 +135,13 @@ export default function CloseAppointment() {
   // דרך useBatchRepo — מזהה ההכנסה נוצר מראש עם batchRepo.newId() כדי
   // שאפשר יהיה לכתוב אותו כ-incomeId על רשומת התור באותו batch.
   //
-  // קיזוז מיתרה (O-7): ירידת remaining ביתרות שנוצלו, יצירת ההכנסה (רק על
-  // החלק ששולם בפועל, ובכיסוי מלא — לא נוצרת כלל) ועדכון התור — הכול
-  // ב-commit אחד. כשל: הודעת שגיאה ו-saving משתחרר, והיתרה לא ירדה.
+  // קיזוז מיתרה (O-7): ירידת remaining ביתרות שנוצלו, יצירת ההכנסה (על החלק
+  // ששולם בפועל; בכיסוי מלא — הכנסה בסכום 0) ועדכון התור — הכול ב-commit אחד. כשל: הודעת שגיאה ו-saving משתחרר, והיתרה לא ירדה.
   async function confirmDone() {
     setSaving(true);
     const allocations = offsetVal > 0 ? allocateCredit(credits, appt.clientId, offsetVal) : [];
     try {
-      const incomeId = fullyCovered ? null : batchRepo.newId("income");
+      const incomeId = batchRepo.newId("income");
       const ops = allocations.map(({ credit, remainingAfter }) => ({
         name: "credits",
         id: credit.id,
@@ -152,33 +151,43 @@ export default function CloseAppointment() {
           status: remainingAfter <= 0 ? "used" : "active",
         },
       }));
-      if (!fullyCovered) {
-        ops.push({
-          name: "income",
-          id: incomeId,
-          type: "add",
-          data: {
-            source: "appointment",
-            appointmentId: appt.id,
-            // clientId נשמר כאן (בנוסף ל-clientName) — אותו דפוס כמו בהכנסות
-            // ממכירת מוצר/רכישת סדרה. בלעדיו אותה לקוחה מופיעה ב"סיכום לפי
-            // לקוחה" בשתי שורות (מפתח clientId מול מפתח name:...). לקוחה
-            // שהוזנה ידנית בתיאום תור (ללא כרטיסייה) — clientId ריק.
-            // הכנסות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId.
-            clientId: appt.clientId || null,
-            clientName: appt.clientName || "",
-            treatmentName: appt.treatmentName || "",
-            // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
-            // שלילי (הקלדה בטעות) נעצר ב-0 (resolveOffset/amountNum).
-            amount: cashAmount,
-            date,
-            invoiceNumber: "",
-            paymentMethod,
-            paid, // אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית
-            ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
-          },
-        });
-      }
+      ops.push({
+        name: "income",
+        id: incomeId,
+        type: "add",
+        data: {
+          source: "appointment",
+          appointmentId: appt.id,
+          // clientId נשמר כאן (בנוסף ל-clientName) — אותו דפוס כמו בהכנסות
+          // ממכירת מוצר/רכישת סדרה. בלעדיו אותה לקוחה מופיעה ב"סיכום לפי
+          // לקוחה" בשתי שורות (מפתח clientId מול מפתח name:...). לקוחה
+          // שהוזנה ידנית בתיאום תור (ללא כרטיסייה) — clientId ריק.
+          // הכנסות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId.
+          clientId: appt.clientId || null,
+          clientName: appt.clientName || "",
+          treatmentName: appt.treatmentName || "",
+          // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
+          // שלילי (הקלדה בטעות) נעצר ב-0 (resolveOffset/amountNum).
+          amount: cashAmount,
+          date,
+          invoiceNumber: "",
+          paymentMethod: fullyCovered ? "" : paymentMethod,
+          // בכיסוי מלא ההכנסה בסכום 0 מסומנת "שולם" (לא נספרת כתשלום שטרם אומת).
+          // אחרת — אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית.
+          paid: fullyCovered ? true : paid,
+          // creditApplications: פירוט לאילו יתרות נוצל הקיזוז — נדרש להחזרת
+          // היתרה במחיקת ההכנסה (Business.jsx).
+          ...(offsetVal > 0
+            ? {
+                creditApplied: offsetVal,
+                creditApplications: allocations.map(({ credit, take }) => ({
+                  creditId: credit.id,
+                  amount: take,
+                })),
+              }
+            : {}),
+        },
+      });
       ops.push({
         name: "appointments",
         id: appt.id,
@@ -190,7 +199,7 @@ export default function CloseAppointment() {
           // החבילה פקעה/נגמרה/נמחקה — התור חויב רגיל, מנתקים את הקישור לחבילה
           clientPackageId: null,
           chargedFromPackage: false,
-          // true רק כשהקיזוז כיסה את כל הסכום ולא נוצרה הכנסה (D-1/D-2)
+          // true רק כשהקיזוז כיסה את כל הסכום (ההכנסה בסכום 0) — רשת ביטחון ל-D-1/D-2
           chargedFromCredit: fullyCovered,
           ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
         },
@@ -360,7 +369,7 @@ export default function CloseAppointment() {
 
           <div className="notice">
             {fullyCovered
-              ? `הסכום מכוסה במלואו מיתרת הזיכוי — לא תיווצר הכנסה חדשה (השובר/הזיכוי כבר נרשמו קודם). אישור הביצוע ינכה ${formatILS(offsetVal)} מהיתרה, ועריכת התור תינעל.`
+              ? `הסכום מכוסה במלואו מיתרת הזיכוי — תיווצר רשומת הכנסה בסכום ₪0 (לתיעוד בלבד; השובר/הזיכוי כבר נרשמו קודם). אישור הביצוע ינכה ${formatILS(offsetVal)} מהיתרה, ועריכת התור תינעל.`
               : `אישור ביצוע ייצור רשומת הכנסה של ${formatILS(cashAmount)} המשויכת לתור${
                   offsetVal > 0 ? ` (בנוסף לקיזוז של ${formatILS(offsetVal)} מהיתרה)` : ""
                 }. אישור התשלום ("שולם") נעשה על ידך — כאן או מאוחר יותר. לאחר האישור עריכת התור תינעל.`}

@@ -66,8 +66,8 @@ export default function SeriesPurchase() {
   const amountVal = amount == null ? s.price ?? 0 : amount;
   const amountNum = Math.max(0, Number(amountVal) || 0);
 
-  // קיזוז מיתרת זיכוי (O-1..O-6, O-12): ההכנסה נרשמת רק על החלק ששולם בפועל;
-  // בכיסוי מלא לא נוצרת הכנסה, ו-incomeId על החבילה נשאר ריק.
+  // קיזוז מיתרת זיכוי (O-1..O-5, O-12): ההכנסה נרשמת רק על החלק ששולם בפועל;
+  // בכיסוי מלא נוצרת הכנסה בסכום 0 עם paid:true (כמו במכירת מוצר).
   const balance = clientId ? creditBalance(credits, clientId) : 0;
   const offsetVal = resolveOffset(offset, balance, amountNum);
   const cashAmount = round2(amountNum - offsetVal);
@@ -81,7 +81,7 @@ export default function SeriesPurchase() {
     setSaving(true);
     const allocations = offsetVal > 0 ? allocateCredit(credits, clientId, offsetVal) : [];
     const packageId = batchRepo.newId("clientPackages");
-    const incomeId = fullyCovered ? null : batchRepo.newId("income");
+    const incomeId = batchRepo.newId("income");
     try {
       const ops = allocations.map(({ credit, remainingAfter }) => ({
         name: "credits",
@@ -92,35 +92,44 @@ export default function SeriesPurchase() {
           status: remainingAfter <= 0 ? "used" : "active",
         },
       }));
-      if (!fullyCovered) {
-        ops.push({
-          name: "income",
-          id: incomeId,
-          type: "add",
-          data: {
-            source: "series",
-            seriesId: s.id,
-            // Phase 4 §3: clientId נשמר כאן (בנוסף ל-clientName), באותו דפוס
-            // שכבר יושם ב-ProductSell.jsx (addendum #14) עבור source:"product".
-            // בלעדיו, מסכים עתידיים שמזהים לקוחה לפי income.clientId (למשל
-            // הרחבה עתידית של טאב "מוצרים" בכרטיסיית הלקוחה גם לסדרות) לא
-            // יוכלו לשייך רכישת סדרה ללקוחה בוודאות — רק דרך clientPackages.
-            // רכישות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId על
-            // רשומת ה-income שלהן (מגבלה על נתונים היסטוריים, לא באג פעיל).
-            clientId: clientId || null,
-            clientName,
-            treatmentName: s.name,
-            // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
-            // שלילי (הקלדה בטעות) נעצר ב-0.
-            amount: cashAmount,
-            date,
-            invoiceNumber: "",
-            paymentMethod,
-            paid,
-            ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
-          },
-        });
-      }
+      ops.push({
+        name: "income",
+        id: incomeId,
+        type: "add",
+        data: {
+          source: "series",
+          seriesId: s.id,
+          // Phase 4 §3: clientId נשמר כאן (בנוסף ל-clientName), באותו דפוס
+          // שכבר יושם ב-ProductSell.jsx (addendum #14) עבור source:"product".
+          // בלעדיו, מסכים עתידיים שמזהים לקוחה לפי income.clientId (למשל
+          // הרחבה עתידית של טאב "מוצרים" בכרטיסיית הלקוחה גם לסדרות) לא
+          // יוכלו לשייך רכישת סדרה ללקוחה בוודאות — רק דרך clientPackages.
+          // רכישות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId על
+          // רשומת ה-income שלהן (מגבלה על נתונים היסטוריים, לא באג פעיל).
+          clientId: clientId || null,
+          clientName,
+          treatmentName: s.name,
+          // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
+          // שלילי (הקלדה בטעות) נעצר ב-0.
+          amount: cashAmount,
+          date,
+          invoiceNumber: "",
+          paymentMethod: fullyCovered ? "" : paymentMethod,
+          // בכיסוי מלא ההכנסה בסכום 0 מסומנת "שולם" (לא נספרת כתשלום שטרם אומת).
+          paid: fullyCovered ? true : paid,
+          // creditApplications: פירוט לאילו יתרות נוצל הקיזוז — נדרש להחזרת
+          // היתרה במחיקת ההכנסה (Business.jsx).
+          ...(offsetVal > 0
+            ? {
+                creditApplied: offsetVal,
+                creditApplications: allocations.map(({ credit, take }) => ({
+                  creditId: credit.id,
+                  amount: take,
+                })),
+              }
+            : {}),
+        },
+      });
       ops.push({
         name: "clientPackages",
         id: packageId,
@@ -136,7 +145,7 @@ export default function SeriesPurchase() {
           remainingSessions: Number(s.sessions) || 0,
           purchaseDate: date,
           expiryDate: s.expiryDate || null,
-          // בכיסוי מלא מיתרה אין הכנסה — incomeId ריק (O-12)
+          // בכיסוי מלא מיתרה ההכנסה בסכום 0 (ראו לעיל) — incomeId תמיד מלא
           incomeId,
           status: "active",
           ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
@@ -305,7 +314,7 @@ export default function SeriesPurchase() {
 
       <div className="notice">
         {fullyCovered
-          ? `הסכום מכוסה במלואו מיתרת הזיכוי — לא תיווצר הכנסה חדשה (השובר/הזיכוי כבר נרשמו קודם). הרכישה תנכה ${formatILS(offsetVal)} מהיתרה ותיצור חבילת לקוחה עם ${s.sessions} מפגשים.`
+          ? `הסכום מכוסה במלואו מיתרת הזיכוי — תיווצר רשומת הכנסה בסכום ₪0 (לתיעוד בלבד; השובר/הזיכוי כבר נרשמו קודם). הרכישה תנכה ${formatILS(offsetVal)} מהיתרה ותיצור חבילת לקוחה עם ${s.sessions} מפגשים.`
           : `הרכישה תיצור רשומת הכנסה של ${formatILS(cashAmount)}${
               offsetVal > 0 ? ` (בנוסף לקיזוז של ${formatILS(offsetVal)} מהיתרה)` : ""
             } וחבילת לקוחה עם ${s.sessions} מפגשים.`}

@@ -8,6 +8,7 @@ import SummaryByClient from "./SummaryByClient";
 import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
 import { formatILS, HEB_MONTHS } from "../../utils/money";
 import { formatDate } from "../../utils/datetime";
+import { round2 } from "../../utils/credits";
 import { exportYearReport } from "../../utils/exportXlsx";
 import { ReceiptBadge, hasReceipt } from "../../components/ReceiptField";
 import { useClinicMode } from "../../context/ClinicModeProvider";
@@ -305,7 +306,7 @@ function IncomeTab({ initialMissing = "" }) {
   // ("למחוק גם את...") נשאלות מיד (דורשות קלט מהמשתמשת ולא ניתנות לדחייה),
   // אבל הביצוע בפועל נדחה יחד עם שאר ה-Undo — כך שגם מחיקת הכנסה עם רשומות
   // מקושרות ניתנת לביטול תוך 5 שניות.
-  async function planLinkedRecords(r) {
+  async function planSourceRecords(r) {
     if (r.source === "appointment" && r.appointmentId) {
       const alsoDeleteAppt = await confirmDialog({
         title: "מחיקת תור משויך",
@@ -372,6 +373,26 @@ function IncomeTab({ initialMissing = "" }) {
     return {};
   }
 
+  // שלב נוסף לכל סוג הכנסה: אם ההכנסה שולמה (גם חלקית) מיתרת זיכוי, נשאלת
+  // השאלה אם להחזיר את הסכום ליתרה (בדפוס של "החזרה למלאי" במכירת מוצר).
+  // הפירוט נשמר על ההכנסה ב-creditApplications; הכנסות ישנות (לפני התוספת)
+  // אינן כוללות אותו — במקרה כזה אין החזרה אוטומטית (ניתן לתקן ידנית בכרטיס
+  // יתרת הזיכוי של הלקוחה).
+  async function planLinkedRecords(r) {
+    const plan = await planSourceRecords(r);
+    const apps = Array.isArray(r.creditApplications) ? r.creditApplications : [];
+    if (apps.length > 0) {
+      const total = round2(apps.reduce((s, a) => s + (Number(a.amount) || 0), 0));
+      const alsoRestore = await confirmDialog({
+        title: "החזרת יתרת זיכוי",
+        message: `ההכנסה שולמה (גם) מיתרת זיכוי בסך ${formatILS(total)}. האם להחזיר את הסכום ליתרה של הלקוחה?`,
+        confirmLabel: "החזרה ליתרה",
+      });
+      if (alsoRestore) plan.restoreCredits = apps;
+    }
+    return plan;
+  }
+
   async function executeLinkedRecords(r, plan) {
     if (plan.deleteAppointment) {
       try {
@@ -402,6 +423,32 @@ function IncomeTab({ initialMissing = "" }) {
         await productRepo.update(productId, { stock: currentStock + qty });
       } catch {
         /* עדכון המלאי נכשל — ההכנסה עדיין תימחק; ניתן לתקן ידנית במסך המוצרים */
+      }
+    }
+    if (plan.restoreCredits) {
+      for (const app of plan.restoreCredits) {
+        // יתרה שנמחקה בינתיים — מדלגים בלי שגיאה.
+        const credit = credits.find((c) => c.id === app.creditId);
+        if (!credit) continue;
+        const restoredTo = Math.min(
+          round2(credit.amount),
+          round2(round2(credit.remaining) + round2(app.amount))
+        );
+        try {
+          await creditRepo.update(credit.id, { remaining: restoredTo, status: "active" });
+          await log({
+            action: "credit_restore",
+            entity: {
+              type: "credit",
+              id: credit.id,
+              desc: `${credit.clientName} — החזרה ממחיקת ${r.treatmentName || "הכנסה"}`,
+            },
+            before: { remaining: credit.remaining },
+            after: { remaining: restoredTo },
+          });
+        } catch {
+          /* ההחזרה נכשלה — ההכנסה עדיין תימחק; ניתן לתקן ידנית בכרטיס יתרת הזיכוי */
+        }
       }
     }
     if (plan.deleteCredit) {
@@ -526,6 +573,11 @@ function IncomeTab({ initialMissing = "" }) {
                     {r.paid ? "שולם" : "לא שולם"}
                   </span>
                   <ReceiptBadge value={r} />
+                  {Number(r.creditApplied) > 0 && (
+                    <span className="badge badge--info sensitive">
+                      קוזז מיתרה {formatILS(r.creditApplied)}
+                    </span>
+                  )}
                 </div>
                 <span className="muted">
                   {formatDate(r.date)} · {r.treatmentName || r.note || "הכנסה"}
