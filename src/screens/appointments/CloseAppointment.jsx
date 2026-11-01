@@ -19,7 +19,11 @@ export default function CloseAppointment() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const backTo = location.state?.from === "dashboard" ? "/" : "/calendar";
+  // לאן חוזרים אחרי אישור/ביטול/חזרה: מסך הבית (from "dashboard"), תצוגת
+  // "ממתינים" ביומן (from "pending" — כדי לסגור כמה תורים ברצף), או לוח השנה.
+  const from = location.state?.from;
+  const backTo =
+    from === "dashboard" ? "/" : from === "pending" ? "/calendar?view=pending" : "/calendar";
   const { items: appts, loading } = useCollectionData("appointments");
   const { items: packages } = useCollectionData("clientPackages");
   // יתרות זיכוי (שוברי מתנה + זיכוי לקוחה) — לקיזוז במסלול ההכנסה הרגיל בלבד.

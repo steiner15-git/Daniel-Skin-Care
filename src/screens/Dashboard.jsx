@@ -4,6 +4,7 @@ import ScreenHeader from "../components/ScreenHeader";
 import { SkeletonRows } from "../components/Skeleton";
 import { useCollectionData, useSettingDoc } from "../data";
 import { useReminderSettings } from "../data/useReminderSettings";
+import { useVatSettings } from "../data/useVatSettings";
 import {
   pendingClosureAppts,
   unverifiedIncome,
@@ -11,6 +12,7 @@ import {
   expiringPackages,
   lowStockProducts,
   referralRewards,
+  vatYearNeedsConfirmation,
 } from "../utils/reminders";
 import { formatTime, formatDate, sameDay } from "../utils/datetime";
 import { fullName, ageFromBirthday } from "./clients/clientUtils";
@@ -49,6 +51,7 @@ export default function Dashboard() {
   const { items: packages } = useCollectionData("clientPackages");
   const { items: products } = useCollectionData("products");
   const { data: reminders } = useReminderSettings();
+  const { years: vatYears, loading: loadingVat } = useVatSettings();
   const { data: business } = useSettingDoc("business");
 
   const now = Date.now();
@@ -118,6 +121,14 @@ export default function Dashboard() {
     [clients, appts, reminders.referralRewardThreshold]
   );
 
+  // תזכורת מע"מ: אין שנת מס שמכסה את היום, או שהשנה הנוכחית טרם אושרה.
+  // נעלמת רק באישור ערך מע"מ עדכני במסך ההגדרות. לא מוצגת בזמן טעינת ההגדרות,
+  // כדי לא להבהב לפני שהנתונים הגיעו.
+  const vatNeed = useMemo(
+    () => (loadingVat ? { needed: false } : vatYearNeedsConfirmation(vatYears)),
+    [vatYears, loadingVat]
+  );
+
   return (
     <>
       <ScreenHeader title="בית" logo={business?.logoData} action={<GearButton />} />
@@ -168,7 +179,7 @@ export default function Dashboard() {
             ))}
           </div>
           {pending.length > CAP && (
-            <Link to="/calendar" className="show-all">הצג הכל ({pending.length}) →</Link>
+            <Link to="/calendar?view=pending" className="show-all">הצג הכל ({pending.length}) →</Link>
           )}
         </>
       )}
@@ -179,7 +190,8 @@ export default function Dashboard() {
         inactive.length > 0 ||
         expiring.length > 0 ||
         lowStock.length > 0 ||
-        referralPending.length > 0) && (
+        referralPending.length > 0 ||
+        vatNeed.needed) && (
         <>
           <h3 className="group-title">תזכורות</h3>
           <div className="card reminders">
@@ -189,6 +201,18 @@ export default function Dashboard() {
                 {ageFromBirthday(c.birthday) != null && ` · גיל ${ageFromBirthday(c.birthday) + (days === 0 ? 0 : 1)}`}
               </div>
             ))}
+            {vatNeed.needed && (
+              <button
+                className="reminder reminder--link"
+                onClick={() => navigate("/settings/vat")}
+              >
+                🧾{" "}
+                {vatNeed.reason === "missing"
+                  ? `לא הוגדרה שנת מס ${vatNeed.year} — יש להגדיר ולאשר ערך מע"מ`
+                  : `יש לאשר ערך מע"מ עדכני לשנת ${vatNeed.year}`}{" "}
+                →
+              </button>
+            )}
             {unpaid.length > 0 && (
               <button
                 className="reminder reminder--link"

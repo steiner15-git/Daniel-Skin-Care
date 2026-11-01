@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
 import { CANCEL_REASONS, CANCEL_REASON_LABELS } from "../../utils/cancellations";
+import { pendingClosureAppts } from "../../utils/reminders";
 import {
   formatTime,
   formatDate,
@@ -19,8 +20,12 @@ export default function Calendar() {
   const confirmDialog = useConfirm();
   const toast = useToast();
   const log = useAuditLog();
+  const [params] = useSearchParams();
 
-  const [view, setView] = useState("month");
+  // תצוגות: month (לוח שנה) | list (רשימה) | pending (ממתינים לסגירה). כניסה
+  // ישירה לתצוגת הממתינים דרך /calendar?view=pending (מרכז "דורש טיפול" בניהול
+  // עסק, ו"הצג הכל" בדשבורד), וגם חזרה אליה אחרי אישור ביצוע (CloseAppointment).
+  const [view, setView] = useState(params.get("view") === "pending" ? "pending" : "month");
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -34,7 +39,7 @@ export default function Calendar() {
   // Phase 4 §9 — appointments מוגבלים לשנה המוצגת כרגע ביומן (cursor), במקום
   // טעינת כל ההיסטוריה מאז ומתמיד. מתעדכן אוטומטית כשעוברים לשנה אחרת.
   //
-  // תיקון QA (2026-09): income *אינו* מוגבל לשנה — נשאב במלואו, כמו
+  // תוקן QA (2026-09): income *אינו* מוגבל לשנה — נשאב במלואו, כמו
   // ב-ClientCard.jsx/BottomNav.jsx/Dashboard.jsx. ההנחה הקודמת ("הכנסה כמעט
   // תמיד נרשמת באותה שנה שבה נסגר התור") בלבלה בין "שנת סגירת התור" לבין
   // "שנת התור המוצג ביומן" (cursor.getFullYear()): שדה "תאריך תשלום" ב-
@@ -49,6 +54,11 @@ export default function Calendar() {
   const { items: appts, loading: la } = useYearRangeCollectionData("appointments", "start", year);
   const { items: events, loading: le } = useCollectionData("events");
   const { items: income } = useCollectionData("income");
+  // כל התורים (מנוי משותף — BottomNav כבר מנוי עליהם, ללא עלות רשת נוספת): נדרש
+  // לתצוגת "ממתינים", כי תור ממתין עשוי להיות משנה קודמת, ולא להופיע בטעינה
+  // המוגבלת לשנה המוצגת. אותה פונקציה (pendingClosureAppts) שמזינה את הבאדג'
+  // בבר התחתון ואת מרכז "דורש טיפול", כך שהמספר זהה בכל המקומות.
+  const { items: allAppts, loading: lp } = useCollectionData("appointments");
   const apptRepo = useRepo("appointments");
   const eventRepo = useRepo("events");
 
@@ -84,6 +94,22 @@ export default function Calendar() {
       }));
     return [...a, ...e];
   }, [appts, events, hiddenEventIds]);
+
+  // תורים ממתינים לסגירה מכל השנים — הישן ביותר ראשון.
+  const pendingItems = useMemo(
+    () =>
+      pendingClosureAppts(allAppts)
+        .sort((a, b) => new Date(a.start) - new Date(b.start))
+        .map((x) => ({
+          id: x.id,
+          type: "appt",
+          start: x.start,
+          title: x.treatmentName || "טיפול",
+          subtitle: x.clientName || "",
+          raw: x,
+        })),
+    [allAppts]
+  );
 
   const treatments = useMemo(
     () => [...new Set(appts.map((a) => a.treatmentName).filter(Boolean))],
@@ -143,7 +169,12 @@ export default function Calendar() {
     });
   }
 
-  const loading = la || le;
+  // מעבר למסך אישור ביצוע. from קובע לאן חוזרים אחרי האישור/הביטול: "calendar"
+  // → לוח השנה; "pending" → תצוגת הממתינים (כדי לסגור כמה תורים ברצף).
+  const closeFrom = (from) => (it) =>
+    navigate(`/appointments/${it.id}/close`, { state: { from } });
+
+  const loading = view === "pending" ? lp : la || le;
 
   return (
     <>
@@ -163,6 +194,9 @@ export default function Calendar() {
         <button className={"seg__btn" + (view === "list" ? " on" : "")} onClick={() => setView("list")}>
           רשימה
         </button>
+        <button className={"seg__btn" + (view === "pending" ? " on" : "")} onClick={() => setView("pending")}>
+          ממתינים{pendingItems.length > 0 ? ` (${pendingItems.length})` : ""}
+        </button>
       </div>
 
       {loading ? (
@@ -179,11 +213,11 @@ export default function Calendar() {
           onEditAppt={(it) => navigate(`/appointments/${it.id}/edit`)}
           onCancelAppt={cancelAppt}
           onResend={(it) => navigate(`/appointments/${it.id}/send`)}
-          onClose={(it) => navigate(`/appointments/${it.id}/close`, { state: { from: "calendar" } })}
+          onClose={closeFrom("calendar")}
           onEditEvent={(it) => navigate(`/calendar/event/${it.id}/edit`)}
           onDeleteEvent={deleteEvent}
         />
-      ) : (
+      ) : view === "list" ? (
         <ListView
           items={items}
           incomeById={incomeById}
@@ -195,11 +229,59 @@ export default function Calendar() {
           onEditAppt={(it) => navigate(`/appointments/${it.id}/edit`)}
           onCancelAppt={cancelAppt}
           onResend={(it) => navigate(`/appointments/${it.id}/send`)}
-          onClose={(it) => navigate(`/appointments/${it.id}/close`, { state: { from: "calendar" } })}
+          onClose={closeFrom("calendar")}
+          onEditEvent={(it) => navigate(`/calendar/event/${it.id}/edit`)}
+          onDeleteEvent={deleteEvent}
+        />
+      ) : (
+        <PendingView
+          items={pendingItems}
+          incomeById={incomeById}
+          onEditAppt={(it) => navigate(`/appointments/${it.id}/edit`)}
+          onCancelAppt={cancelAppt}
+          onResend={(it) => navigate(`/appointments/${it.id}/send`)}
+          onClose={closeFrom("pending")}
           onEditEvent={(it) => navigate(`/calendar/event/${it.id}/edit`)}
           onDeleteEvent={deleteEvent}
         />
       )}
+    </>
+  );
+}
+
+// תצוגת "ממתינים לסגירה": כל התורים שמועדם עבר וטרם אושר ביצוע או בוטלו, מכל
+// השנים, הישן ביותר ראשון, מקובצים לפי תאריך. אותה שורה (ItemRow) כמו בשאר
+// התצוגות, כולל "אישור ביצוע".
+function PendingView({ items, incomeById, ...actions }) {
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const it of items) {
+      const key = formatDate(it.start);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(it);
+    }
+    return [...map.entries()];
+  }, [items]);
+
+  if (items.length === 0) {
+    return <div className="empty-state">אין תורים ממתינים לסגירה.</div>;
+  }
+
+  return (
+    <>
+      <div className="notice" style={{ marginTop: 0 }}>
+        תורים שמועדם עבר וטרם אושר ביצוע או בוטלו, מכל השנים — הישן ביותר ראשון.
+      </div>
+      {groups.map(([date, list]) => (
+        <div key={date}>
+          <h3 className="group-title">{date}</h3>
+          <div className="list">
+            {list.map((it) => (
+              <ItemRow key={it.type + it.id} it={it} incomeById={incomeById} {...actions} />
+            ))}
+          </div>
+        </div>
+      ))}
     </>
   );
 }

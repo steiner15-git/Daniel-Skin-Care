@@ -5,11 +5,35 @@ import BarChart from "../../components/BarChart";
 import { SkeletonRows } from "../../components/Skeleton";
 import SummaryByProduct from "./SummaryByProduct";
 import SummaryByClient from "./SummaryByClient";
+import SummaryOverview from "./SummaryOverview";
 import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
+import { useVatSettings } from "../../data/useVatSettings";
+import { useReminderSettings } from "../../data/useReminderSettings";
 import { formatILS, HEB_MONTHS } from "../../utils/money";
 import { formatDate } from "../../utils/datetime";
 import { round2 } from "../../utils/credits";
 import { exportYearReport } from "../../utils/exportXlsx";
+import {
+  incomeVat,
+  expenseVat,
+  incomeRevenue,
+  expenseCost,
+  incomeVatDue,
+  expenseVatCredit,
+  formatMoney2,
+  taxYearFor,
+  isLicensed,
+  turnoverForYear,
+} from "../../utils/vat";
+import {
+  pendingClosureAppts,
+  unverifiedIncome,
+  incomeMissingInvoice,
+  expensesMissingReceipt,
+} from "../../utils/reminders";
+import { openSeriesLiability } from "../../utils/seriesRealization";
+import { recurringEnded } from "../../utils/recurring";
+import { periodRange } from "../../utils/period";
 import { ReceiptBadge, hasReceipt } from "../../components/ReceiptField";
 import { useClinicMode } from "../../context/ClinicModeProvider";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
@@ -24,31 +48,150 @@ const CURRENT_MONTH = new Date().getMonth();
 // רצים תמיד גם כשהטאב הפעיל לא זקוק להם כלל (למשל income נטען גם כשהמסך
 // על "הוצאות") — וגם היו "נועלים" את שני הטאבים על טעינת ההיסטוריה
 // המלאה מאז ומתמיד, בלי דרך לצמצם.
+// תווית מקור להכנסה (תגית לחיצה בשורה, מובילה לכרטיסיית הלקוחה). הכנסה ידנית
+// (manual) אינה מקבלת תגית.
+const SOURCE_LABELS = { appointment: "מתור", series: "סדרה", product: "מוצר", voucher: "שובר" };
+
+// קיבוץ רשימה (ממוינת לפי תאריך) לפי חודש, עם סכום חלקי לכל חודש.
+function monthGroups(list, amountOf) {
+  const map = new Map();
+  for (const r of list) {
+    const d = new Date(r.date);
+    const bad = isNaN(d);
+    const key = bad ? "none" : `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        label: bad ? "ללא תאריך" : `${HEB_MONTHS[d.getMonth()]} ${d.getFullYear()}`,
+        items: [],
+        total: 0,
+      });
+    }
+    const g = map.get(key);
+    g.items.push(r);
+    g.total += amountOf(r);
+  }
+  return [...map.values()];
+}
+
 export default function Business() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") || "summary");
+  // פילטרים שמגיעים מ"דורש טיפול" או מקישור עמוק (?filter=unpaid). מתאפסים
+  // בלחיצה ידנית על טאב, כדי שפילטר ישן לא "ידבק" לכניסה הבאה.
+  const [incomeMissing, setIncomeMissing] = useState(
+    params.get("filter") === "unpaid" ? "confirmation" : ""
+  );
+  const [expenseReceipt, setExpenseReceipt] = useState("");
+  // drill-down מהסיכומים: { tab, year, from, to, q?, source?, category? } — נפתח
+  // טאב ההכנסות/ההוצאות עם הסינון המתאים (ראו IncomeTab/ExpenseTab `initial`).
+  const [drill, setDrill] = useState(null);
+
+  function openTab(name) {
+    setIncomeMissing("");
+    setExpenseReceipt("");
+    setDrill(null);
+    setTab(name);
+  }
+  function goIncome(missing) {
+    setIncomeMissing(missing);
+    setExpenseReceipt("");
+    setDrill(null);
+    setTab("income");
+  }
+  function goExpense(receipt) {
+    setExpenseReceipt(receipt);
+    setIncomeMissing("");
+    setDrill(null);
+    setTab("expense");
+  }
+  function goDrill(d) {
+    setDrill(d);
+    setIncomeMissing("");
+    setExpenseReceipt("");
+    setTab(d.tab);
+  }
 
   return (
     <>
       <ScreenHeader title="ניהול עסק" />
       <div className="seg" style={{ marginBottom: 16 }}>
-        <button className={"seg__btn" + (tab === "summary" ? " on" : "")} onClick={() => setTab("summary")}>
+        <button className={"seg__btn" + (tab === "summary" ? " on" : "")} onClick={() => openTab("summary")}>
           סיכום
         </button>
-        <button className={"seg__btn" + (tab === "income" ? " on" : "")} onClick={() => setTab("income")}>
+        <button className={"seg__btn" + (tab === "income" ? " on" : "")} onClick={() => openTab("income")}>
           הכנסות
         </button>
-        <button className={"seg__btn" + (tab === "expense" ? " on" : "")} onClick={() => setTab("expense")}>
+        <button className={"seg__btn" + (tab === "expense" ? " on" : "")} onClick={() => openTab("expense")}>
           הוצאות
         </button>
       </div>
 
-      {tab === "summary" && <SummaryTabs />}
+      {tab === "summary" && <AttentionHub onIncome={goIncome} onExpense={goExpense} />}
+      {tab === "summary" && <SummaryTabs onDrill={goDrill} />}
       {tab === "income" && (
-        <IncomeTab initialMissing={params.get("filter") === "unpaid" ? "confirmation" : ""} />
+        <IncomeTab
+          key={incomeMissing + JSON.stringify(drill)}
+          initialMissing={incomeMissing}
+          initial={drill?.tab === "income" ? drill : {}}
+        />
       )}
-      {tab === "expense" && <ExpenseTab />}
+      {tab === "expense" && (
+        <ExpenseTab
+          key={expenseReceipt + JSON.stringify(drill)}
+          initialReceipt={expenseReceipt}
+          initial={drill?.tab === "expense" ? drill : {}}
+        />
+      )}
     </>
+  );
+}
+
+// מרכז "דורש טיפול": ריכוז פריטים פתוחים עם קישור לרשימה המסוננת. מוצג רק כשיש
+// מה לטפל. החישובים ב-utils/reminders.js (משותפים עם מסך הבית והבאדג'ים);
+// "חשבונית חסרה" ו"הוצאה בלי תמונה" נספרים לשנה הנוכחית בלבד.
+function AttentionHub({ onIncome, onExpense }) {
+  const navigate = useNavigate();
+  const { items: appts } = useCollectionData("appointments");
+  const { items: income } = useCollectionData("income");
+  const { items: expenses } = useCollectionData("expenses");
+  const { data: reminders } = useReminderSettings();
+  const thisYear = new Date().getFullYear();
+
+  const pending = useMemo(() => pendingClosureAppts(appts), [appts]);
+  const unpaid = useMemo(
+    () => unverifiedIncome(income, reminders.paymentVerificationDays),
+    [income, reminders.paymentVerificationDays]
+  );
+  const noInvoice = useMemo(() => incomeMissingInvoice(income, thisYear), [income, thisYear]);
+  const noReceipt = useMemo(() => expensesMissingReceipt(expenses, thisYear), [expenses, thisYear]);
+
+  if (!pending.length && !unpaid.length && !noInvoice.length && !noReceipt.length) return null;
+
+  return (
+    <div className="card reminders" style={{ marginBottom: 16 }}>
+      <strong>דורש טיפול</strong>
+      {pending.length > 0 && (
+        <button className="reminder reminder--link" onClick={() => navigate("/calendar?view=pending")}>
+          🕓 {pending.length} תורים ממתינים לסגירה →
+        </button>
+      )}
+      {unpaid.length > 0 && (
+        <button className="reminder reminder--link" onClick={() => onIncome("confirmation")}>
+          💰 {unpaid.length} הכנסות טרם אומתו (מעל {reminders.paymentVerificationDays} ימים) →
+        </button>
+      )}
+      {noInvoice.length > 0 && (
+        <button className="reminder reminder--link" onClick={() => onIncome("invoice")}>
+          🧾 {noInvoice.length} הכנסות השנה בלי מספר חשבונית →
+        </button>
+      )}
+      {noReceipt.length > 0 && (
+        <button className="reminder reminder--link" onClick={() => onExpense("without")}>
+          📎 {noReceipt.length} הוצאות השנה בלי תמונה →
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -61,7 +204,7 @@ export default function Business() {
 // בעבר כדי לתווך בין הטאבים, כך שזו נקודת החיבור הנכונה לשינוי — Summary()
 // עצמה ממשיכה לקבל בדיוק את אותם income/expenses לא-מוגבלים כמו קודם,
 // ה-source שלהם רק זז שכבה אחת למעלה.
-function SummaryTabs() {
+function SummaryTabs({ onDrill }) {
   const [sub, setSub] = useState("general");
   const { items: income } = useCollectionData("income");
   const { items: expenses } = useCollectionData("expenses");
@@ -77,32 +220,65 @@ function SummaryTabs() {
         <button className={"seg__btn" + (sub === "client" ? " on" : "")} onClick={() => setSub("client")}>
           לפי לקוחה
         </button>
+        <button className={"seg__btn" + (sub === "overview" ? " on" : "")} onClick={() => setSub("overview")}>
+          מבט על
+        </button>
       </div>
-      {sub === "general" && <Summary income={income} expenses={expenses} />}
-      {sub === "product" && <SummaryByProduct />}
-      {sub === "client" && <SummaryByClient />}
+      {sub === "general" && <Summary income={income} expenses={expenses} onDrill={onDrill} />}
+      {sub === "product" && <SummaryByProduct onDrill={onDrill} />}
+      {sub === "client" && <SummaryByClient onDrill={onDrill} />}
+      {sub === "overview" && <SummaryOverview onDrill={onDrill} />}
     </>
   );
 }
 
-function Summary({ income, expenses }) {
+function Summary({ income, expenses, onDrill }) {
   const { enabled: clinicMode } = useClinicMode();
+  const { years } = useVatSettings();
+  const { items: packages } = useCollectionData("clientPackages");
   const [year, setYear] = useState(CURRENT_YEAR);
   const [month, setMonth] = useState(CURRENT_MONTH);
   const [mode, setMode] = useState("month");
 
+  // מע"מ: הכנסה = נטו בשנת מורשה / סכום כולל בשנת פטור; הוצאה = נטו בשנת מורשה
+  // / סכום כולל בשנת פטור (utils/vat.js). outVat/inVat — מע"מ עסקאות/תשומות,
+  // רק מרשומות בשנת מורשה; lic — האם יש בחודש רשומות בשנת מורשה.
   const monthly = useMemo(() => {
-    const arr = Array.from({ length: 12 }, () => ({ income: 0, expense: 0 }));
+    const arr = Array.from({ length: 12 }, () => ({
+      income: 0,
+      expense: 0,
+      outVat: 0,
+      inVat: 0,
+      lic: false,
+    }));
     for (const r of income) {
       const d = new Date(r.date);
-      if (d.getFullYear() === year) arr[d.getMonth()].income += Number(r.amount) || 0;
+      if (d.getFullYear() === year) {
+        const m = arr[d.getMonth()];
+        m.income += incomeRevenue(r, years);
+        m.outVat += incomeVatDue(r, years);
+        if (incomeVat(r, years).licensed) m.lic = true;
+      }
     }
     for (const r of expenses) {
       const d = new Date(r.date);
-      if (d.getFullYear() === year) arr[d.getMonth()].expense += Number(r.total) || 0;
+      if (d.getFullYear() === year) {
+        const m = arr[d.getMonth()];
+        m.expense += expenseCost(r, years);
+        m.inVat += expenseVatCredit(r, years);
+        if (expenseVat(r, years).licensed) m.lic = true;
+      }
     }
     return arr;
-  }, [income, expenses, year]);
+  }, [income, expenses, year, years]);
+
+  // סדרות פתוחות (נכון להיום): שווי המפגשים שנותרו בחבילות פעילות. שכבה ניהולית
+  // בלבד — אינה נספרת בהכנסות (ראו utils/seriesRealization.js).
+  const openSeries = useMemo(() => {
+    const incomeById = {};
+    for (const r of income) incomeById[r.id] = { amount: incomeRevenue(r, years) };
+    return openSeriesLiability(packages, incomeById);
+  }, [income, packages, years]);
 
   // מצב קליניקה פעיל: מסתירים לגמרי את תוכן הסיכום הכספי (לא רק מטשטשים) —
   // הטאבים עצמם נשארים זמינים לניווט.
@@ -117,12 +293,25 @@ function Summary({ income, expenses }) {
   const scope =
     mode === "year"
       ? monthly.reduce(
-          (s, m) => ({ income: s.income + m.income, expense: s.expense + m.expense }),
-          { income: 0, expense: 0 }
+          (s, m) => ({
+            income: s.income + m.income,
+            expense: s.expense + m.expense,
+            outVat: s.outVat + m.outVat,
+            inVat: s.inVat + m.inVat,
+            lic: s.lic || m.lic,
+          }),
+          { income: 0, expense: 0, outVat: 0, inVat: 0, lic: false }
         )
       : monthly[month];
 
   const profit = scope.income - scope.expense;
+  const vatDue = round2(scope.outVat - scope.inVat);
+
+  // מד תקרת מחזור: רק לשנת מס של עוסק פטור עם תקרה שהוגדרה.
+  const taxEntry = taxYearFor(`${year}-06-30`, years);
+  const showMeter = !!taxEntry && !isLicensed(taxEntry) && taxEntry.ceiling > 0;
+  const turnover = showMeter ? turnoverForYear(income, years, taxEntry.id) : 0;
+  const meterPct = showMeter ? Math.round((turnover / taxEntry.ceiling) * 100) : 0;
   const chartData = monthly.map((m, i) => ({
     label: HEB_MONTHS[i].slice(0, 3),
     income: m.income,
@@ -171,6 +360,90 @@ function Summary({ income, expenses }) {
         </div>
       </div>
 
+      {/* drill-down: מעבר לרשימת ההכנסות/ההוצאות של התקופה שמוצגת */}
+      {onDrill && (
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={() => onDrill({ tab: "income", year, ...periodRange(year, month, mode) })}
+          >
+            הכנסות התקופה ‹
+          </button>
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={() => onDrill({ tab: "expense", year, ...periodRange(year, month, mode) })}
+          >
+            הוצאות התקופה ‹
+          </button>
+        </div>
+      )}
+
+      {/* מע"מ לתשלום — מוצג רק כשיש בטווח רשומות בשנת מורשה */}
+      {scope.lic && (
+        <div className="stat stat--profit" style={{ marginTop: 10 }}>
+          <span className="muted">מע"מ לתשלום (עסקאות פחות תשומות)</span>
+          <strong>{formatMoney2(vatDue)}</strong>
+          <span className="muted" style={{ marginTop: 4 }}>
+            עסקאות {formatMoney2(scope.outVat)} · תשומות {formatMoney2(scope.inVat)}
+          </span>
+        </div>
+      )}
+
+      {showMeter && (
+        <div className="card" style={{ marginTop: 10 }}>
+          <div className="card-head" style={{ marginBottom: 8 }}>
+            <h3>מחזור מול תקרת עוסק פטור</h3>
+            <strong className="sensitive">{meterPct}%</strong>
+          </div>
+          <div
+            style={{
+              height: 10,
+              borderRadius: 999,
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.min(100, meterPct)}%`,
+                height: "100%",
+                background:
+                  meterPct >= 100 ? "var(--danger)" : meterPct >= 80 ? "#c98228" : "var(--accent-2)",
+              }}
+            />
+          </div>
+          <p className="muted sensitive" style={{ fontSize: 13, margin: "8px 0 0" }}>
+            {formatILS(turnover)} מתוך {formatILS(taxEntry.ceiling)}
+          </p>
+          {meterPct >= 80 && (
+            <p className="warn-text">
+              ⚠ {meterPct >= 100 ? "המחזור עבר את התקרה" : "המחזור מתקרב לתקרה"} — כדאי לבדוק מעבר
+              לעוסק מורשה (המעבר חל על כל שנת המס).
+            </p>
+          )}
+        </div>
+      )}
+
+      {(openSeries.sessions > 0 || openSeries.expiredSessions > 0) && (
+        <div className="card" style={{ marginTop: 10 }}>
+          <div className="card-head" style={{ marginBottom: 6 }}>
+            <h3>סדרות פתוחות</h3>
+            <strong className="sensitive">{formatILS(openSeries.value)}</strong>
+          </div>
+          <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+            נכון להיום: {openSeries.sessions} מפגשים שנותרו ב-{openSeries.count} חבילות פעילות — כסף
+            שכבר נגבה ועדיין לא נוצל. לא נספר בהכנסות.
+          </p>
+          {openSeries.expiredSessions > 0 && (
+            <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+              פקעו ללא מימוש: {openSeries.expiredSessions} מפגשים ·{" "}
+              <span className="sensitive">{formatILS(openSeries.expiredValue)}</span>
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="card" style={{ marginTop: 16 }}>
         <BarChart data={chartData} highlight={mode === "month" ? month : -1} />
       </div>
@@ -178,7 +451,7 @@ function Summary({ income, expenses }) {
       <button
         className="btn btn--ghost btn--block"
         style={{ marginTop: 16 }}
-        onClick={() => exportYearReport(year, income, expenses)}
+        onClick={() => exportYearReport(year, income, expenses, years)}
       >
         ⬇ ייצוא דוח שנתי ל-Excel ({year})
       </button>
@@ -211,7 +484,7 @@ function YearScopeNav({ year, setYear, allYears, setAllYears }) {
 }
 
 /* ---------- הכנסות ---------- */
-function IncomeTab({ initialMissing = "" }) {
+function IncomeTab({ initialMissing = "", initial = {} }) {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
@@ -227,18 +500,20 @@ function IncomeTab({ initialMissing = "" }) {
   // שוברי מתנה (D-3): מחיקת הכנסת שובר מציעה למחוק גם את היתרה שנוצרה ממנה.
   const { items: credits } = useCollectionData("credits");
   const creditRepo = useRepo("credits");
+  const { years } = useVatSettings();
   const log = useAuditLog();
   const confirmDialog = useConfirm();
   const toast = useToast();
   const { data: pmDoc } = useSettingDoc("paymentMethods");
   const methods = pmDoc?.items ?? [];
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initial.q || "");
   const [missing, setMissing] = useState(initialMissing); // "" | confirmation | invoice | both
   const [status, setStatus] = useState(""); // "" | paid | unpaid
   const [method, setMethod] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [from, setFrom] = useState(initial.from || "");
+  const [to, setTo] = useState(initial.to || "");
   const [receipt, setReceipt] = useState(""); // "" | with | without
+  const [source, setSource] = useState(initial.source || ""); // "" | appointment | series | product | voucher | manual
   const [sortBy, setSortBy] = useState("date");
   // Phase 4 §9 (המשך) — ברירת מחדל: השנה הנוכחית בלבד (שאילתה מוגבלת, ראו
   // useYearRangeCollectionData). "כל השנים" משחזר בדיוק את ההתנהגות
@@ -249,8 +524,8 @@ function IncomeTab({ initialMissing = "" }) {
   // — הכנסה לא-מאומתת עשויה להיות משנה קודמת, ולא רק מהשנה הנוכחית),
   // ברירת המחדל היא "כל השנים" ולא השנה הנוכחית — אחרת הזימון הישיר
   // (deep-link) עלול "לאבד" בשקט את הרשומה שאותה בדיוק ביקשו למצוא.
-  const [year, setYear] = useState(CURRENT_YEAR);
-  const [allYears, setAllYears] = useState(!!initialMissing);
+  const [year, setYear] = useState(initial.year || CURRENT_YEAR);
+  const [allYears, setAllYears] = useState(initialMissing === "confirmation" || initialMissing === "both");
   const { items: income, loading } = useYearRangeCollectionData(
     "income",
     "date",
@@ -275,6 +550,7 @@ function IncomeTab({ initialMissing = "" }) {
     if (status === "paid") l = l.filter((r) => r.paid);
     else if (status === "unpaid") l = l.filter((r) => !r.paid);
     if (method) l = l.filter((r) => r.paymentMethod === method);
+    if (source) l = l.filter((r) => (r.source || "manual") === source);
     if (from) l = l.filter((r) => (r.date || "") >= from);
     if (to) l = l.filter((r) => (r.date || "") <= to);
     if (receipt === "with") l = l.filter(hasReceipt);
@@ -288,7 +564,7 @@ function IncomeTab({ initialMissing = "" }) {
       return new Date(b.date) - new Date(a.date);
     });
     return l;
-  }, [income, q, status, method, from, to, receipt, missing, sortBy, clinicMode, hiddenIds]);
+  }, [income, q, status, method, from, to, receipt, source, missing, sortBy, clinicMode, hiddenIds]);
 
   async function togglePaid(r) {
     const paid = !r.paid;
@@ -500,6 +776,82 @@ function IncomeTab({ initialMissing = "" }) {
     });
   }
 
+  // סיכום לפי הסינון + קיבוץ חודשי (כשהמיון לפי תאריך).
+  const listTotals = list.reduce(
+    (s, r) => {
+      const p = incomeVat(r, years);
+      return { gross: s.gross + p.gross, net: s.net + p.net, vat: s.vat + p.vat };
+    },
+    { gross: 0, net: 0, vat: 0 }
+  );
+  const incomeGroups = sortBy === "date" ? monthGroups(list, (r) => Number(r.amount) || 0) : [];
+
+  function renderRow(r) {
+    const vp = incomeVat(r, years);
+    const srcLabel = SOURCE_LABELS[r.source];
+    return (
+      <div key={r.id} className="card fin-item">
+        <div className="fin-item__main">
+          <div className="fin-item__top">
+            <strong className="sensitive">{formatILS(r.amount)}</strong>
+            <span className={"badge " + (r.paid ? "badge--ok" : "badge--warn")}>
+              {r.paid ? "שולם" : "לא שולם"}
+            </span>
+            <ReceiptBadge value={r} />
+            {srcLabel &&
+              (r.clientId ? (
+                <button
+                  type="button"
+                  className="badge badge--info badge--btn"
+                  onClick={() =>
+                    navigate(`/clients/${r.clientId}`, {
+                      state: { tab: r.source === "product" ? "products" : "appointments" },
+                    })
+                  }
+                >
+                  {srcLabel} ‹
+                </button>
+              ) : (
+                <span className="badge badge--info">{srcLabel}</span>
+              ))}
+            {Number(r.creditApplied) > 0 && (
+              <span className="badge badge--info sensitive">
+                קוזז מיתרה {formatILS(r.creditApplied)}
+              </span>
+            )}
+          </div>
+          <span className="muted">
+            {formatDate(r.date)} · {r.treatmentName || r.note || "הכנסה"}
+            {r.clientName ? ` · ${r.clientName}` : ""}
+          </span>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {r.paymentMethod || "—"}
+            {r.invoiceNumber ? ` · חשבונית ${r.invoiceNumber}` : " · ללא חשבונית"}
+          </span>
+          <span className="muted sensitive" style={{ fontSize: 12 }}>
+            נטו {formatMoney2(vp.net)} · מע"מ {formatMoney2(vp.vat)} ({vp.rate}%)
+          </span>
+        </div>
+        <div className="fin-item__actions">
+          <button className="btn btn--ghost" onClick={() => togglePaid(r)}>
+            {r.paid ? "בטל שולם" : "סמן שולם"}
+          </button>
+          <button className="btn btn--ghost" onClick={() => navigate(`/business/income/${r.id}/edit`)}>
+            עריכה
+          </button>
+          <button
+            className="btn btn--muted"
+            disabled={r.paid}
+            title={r.paid ? "יש להסיר סימון 'שולם' לפני מחיקה" : ""}
+            onClick={() => remove(r)}
+          >
+            מחיקה
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <YearScopeNav year={year} setYear={setYear} allYears={allYears} setAllYears={setAllYears} />
@@ -543,6 +895,14 @@ function IncomeTab({ initialMissing = "" }) {
           </select>
         </div>
         <div className="toolbar__row">
+          <select value={source} onChange={(e) => setSource(e.target.value)}>
+            <option value="">כל המקורות</option>
+            <option value="appointment">מתור</option>
+            <option value="series">מסדרה</option>
+            <option value="product">ממוצר</option>
+            <option value="voucher">משובר</option>
+            <option value="manual">ידנית</option>
+          </select>
           <select value={receipt} onChange={(e) => setReceipt(e.target.value)}>
             <option value="">תמונה: הכל</option>
             <option value="with">עם תמונה</option>
@@ -563,50 +923,27 @@ function IncomeTab({ initialMissing = "" }) {
             : "אין הכנסות להצגה."}
         </div>
       ) : (
-        <div className="list">
-          {list.map((r) => (
-            <div key={r.id} className="card fin-item">
-              <div className="fin-item__main">
-                <div className="fin-item__top">
-                  <strong className="sensitive">{formatILS(r.amount)}</strong>
-                  <span className={"badge " + (r.paid ? "badge--ok" : "badge--warn")}>
-                    {r.paid ? "שולם" : "לא שולם"}
-                  </span>
-                  <ReceiptBadge value={r} />
-                  {Number(r.creditApplied) > 0 && (
-                    <span className="badge badge--info sensitive">
-                      קוזז מיתרה {formatILS(r.creditApplied)}
-                    </span>
-                  )}
-                </div>
-                <span className="muted">
-                  {formatDate(r.date)} · {r.treatmentName || r.note || "הכנסה"}
-                  {r.clientName ? ` · ${r.clientName}` : ""}
-                </span>
-                <span className="muted" style={{ fontSize: 12 }}>
-                  {r.paymentMethod || "—"}
-                  {r.invoiceNumber ? ` · חשבונית ${r.invoiceNumber}` : " · ללא חשבונית"}
-                </span>
+        <>
+          <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+            {list.length} רשומות ·{" "}
+            <span className="sensitive">
+              {formatILS(listTotals.gross)} · נטו {formatMoney2(listTotals.net)} · מע"מ{" "}
+              {formatMoney2(listTotals.vat)}
+            </span>
+          </p>
+          {(sortBy === "date" ? incomeGroups : [{ key: "all", label: null, items: list, total: 0 }]).map(
+            (g) => (
+              <div key={g.key}>
+                {g.label && (
+                  <h3 className="group-title">
+                    {g.label} · <span className="sensitive">{formatILS(g.total)}</span> ({g.items.length})
+                  </h3>
+                )}
+                <div className="list">{g.items.map(renderRow)}</div>
               </div>
-              <div className="fin-item__actions">
-                <button className="btn btn--ghost" onClick={() => togglePaid(r)}>
-                  {r.paid ? "בטל שולם" : "סמן שולם"}
-                </button>
-                <button className="btn btn--ghost" onClick={() => navigate(`/business/income/${r.id}/edit`)}>
-                  עריכה
-                </button>
-                <button
-                  className="btn btn--muted"
-                  disabled={r.paid}
-                  title={r.paid ? "יש להסיר סימון 'שולם' לפני מחיקה" : ""}
-                  onClick={() => remove(r)}
-                >
-                  מחיקה
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+            )
+          )}
+        </>
       )}
       <p className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 10 }}>
         הכנסה שסומנה "שולם" אינה ניתנת למחיקה עד להסרת הסימון.
@@ -616,25 +953,26 @@ function IncomeTab({ initialMissing = "" }) {
 }
 
 /* ---------- הוצאות ---------- */
-function ExpenseTab() {
+function ExpenseTab({ initialReceipt = "", initial = {} }) {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("expenses");
+  const { years } = useVatSettings();
   const log = useAuditLog();
   const confirmDialog = useConfirm();
   const toast = useToast();
   const { data: catDoc } = useSettingDoc("expenseCategories");
   const categories = catDoc?.items ?? [];
-  const [q, setQ] = useState("");
-  const [category, setCategory] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [receipt, setReceipt] = useState(""); // "" | with | without
+  const [q, setQ] = useState(initial.q || "");
+  const [category, setCategory] = useState(initial.category || "");
+  const [from, setFrom] = useState(initial.from || "");
+  const [to, setTo] = useState(initial.to || "");
+  const [receipt, setReceipt] = useState(initialReceipt); // "" | with | without
   const [sortBy, setSortBy] = useState("date");
   // Phase 4 §9 (המשך) — ראו הערה מקבילה ב-IncomeTab. אין כאן deep-link
   // "unpaid" מקביל (הוצאות אינן נזקקות לאימות תשלום), ולכן אין חריג כמו
   // ב-IncomeTab — ברירת המחדל היא תמיד השנה הנוכחית.
-  const [year, setYear] = useState(CURRENT_YEAR);
+  const [year, setYear] = useState(initial.year || CURRENT_YEAR);
   const [allYears, setAllYears] = useState(false);
   const { items: expenses, loading } = useYearRangeCollectionData(
     "expenses",
@@ -696,6 +1034,57 @@ function ExpenseTab() {
     });
   }
 
+  // סיכום לפי הסינון + קיבוץ חודשי (כשהמיון לפי תאריך).
+  const listTotals = list.reduce(
+    (s, r) => {
+      const p = expenseVat(r, years);
+      return { gross: s.gross + p.gross, net: s.net + p.net, vat: s.vat + p.vat };
+    },
+    { gross: 0, net: 0, vat: 0 }
+  );
+  const expenseGroups = sortBy === "date" ? monthGroups(list, (r) => Number(r.total) || 0) : [];
+
+  function renderRow(r) {
+    const vp = expenseVat(r, years);
+    return (
+      <div key={r.id} className="card fin-item">
+        <div className="fin-item__main">
+          <div className="fin-item__top">
+            <strong className="sensitive">{formatILS(r.total)}</strong>
+            {r.recurring && (
+              <span className="badge badge--info">
+                קבועה · {r.recurring === "yearly" ? "שנתי" : "חודשי"}
+                {r.recurringEnd ? ` · עד ${formatDate(r.recurringEnd)}` : ""}
+              </span>
+            )}
+            {r.recurring && recurringEnded(r) && <span className="badge badge--pending">הסתיימה</span>}
+            {r.generatedFrom && <span className="badge badge--info">נוצרה אוטומטית</span>}
+            <ReceiptBadge value={r} />
+          </div>
+          <span className="muted">
+            {formatDate(r.date)} · {r.description || "הוצאה"}
+            {r.businessName ? ` · ${r.businessName}` : ""}
+          </span>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {r.category || "—"}
+            {r.invoiceNumber ? ` · חשבונית ${r.invoiceNumber}` : ""}
+          </span>
+          <span className="muted sensitive" style={{ fontSize: 12 }}>
+            נטו {formatMoney2(vp.net)} · מע"מ {formatMoney2(vp.vat)} ({vp.rate}%)
+          </span>
+        </div>
+        <div className="fin-item__actions">
+          <button className="btn btn--ghost" onClick={() => navigate(`/business/expense/${r.id}/edit`)}>
+            עריכה
+          </button>
+          <button className="btn btn--muted" onClick={() => remove(r)}>
+            מחיקה
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <YearScopeNav year={year} setYear={setYear} allYears={allYears} setAllYears={setAllYears} />
@@ -746,35 +1135,27 @@ function ExpenseTab() {
             : "אין הוצאות להצגה."}
         </div>
       ) : (
-        <div className="list">
-          {list.map((r) => (
-            <div key={r.id} className="card fin-item">
-              <div className="fin-item__main">
-                <div className="fin-item__top">
-                  <strong className="sensitive">{formatILS(r.total)}</strong>
-                  {r.recurring && <span className="badge badge--info">קבועה · {r.recurring === "yearly" ? "שנתי" : "חודשי"}</span>}
-                  <ReceiptBadge value={r} />
-                </div>
-                <span className="muted">
-                  {formatDate(r.date)} · {r.description || "הוצאה"}
-                  {r.businessName ? ` · ${r.businessName}` : ""}
-                </span>
-                <span className="muted" style={{ fontSize: 12 }}>
-                  {r.category || "—"}
-                  {r.invoiceNumber ? ` · חשבונית ${r.invoiceNumber}` : ""}
-                </span>
+        <>
+          <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+            {list.length} רשומות ·{" "}
+            <span className="sensitive">
+              {formatILS(listTotals.gross)} · נטו {formatMoney2(listTotals.net)} · מע"מ{" "}
+              {formatMoney2(listTotals.vat)}
+            </span>
+          </p>
+          {(sortBy === "date" ? expenseGroups : [{ key: "all", label: null, items: list, total: 0 }]).map(
+            (g) => (
+              <div key={g.key}>
+                {g.label && (
+                  <h3 className="group-title">
+                    {g.label} · <span className="sensitive">{formatILS(g.total)}</span> ({g.items.length})
+                  </h3>
+                )}
+                <div className="list">{g.items.map(renderRow)}</div>
               </div>
-              <div className="fin-item__actions">
-                <button className="btn btn--ghost" onClick={() => navigate(`/business/expense/${r.id}/edit`)}>
-                  עריכה
-                </button>
-                <button className="btn btn--muted" onClick={() => remove(r)}>
-                  מחיקה
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+            )
+          )}
+        </>
       )}
     </>
   );

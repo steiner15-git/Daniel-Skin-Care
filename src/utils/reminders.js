@@ -1,5 +1,10 @@
 import { isReferred } from "../screens/clients/clientUtils";
 
+// תזכורת מע"מ: אין שנת מס שמכסה את היום, או שהשנה הנוכחית טרם אושרה.
+// הלוגיקה עצמה בנויה ב-utils/vat.js (יחד עם שאר חישובי המע"מ) ומיוצאת מכאן
+// כדי ש-Dashboard וכל צרכן אחר יקבלו את כל התזכורות ממקום אחד.
+export { vatYearNeedsConfirmation } from "./vat";
+
 // חישובים משותפים לתזכורות — משמשים גם את מסך הבית (Dashboard), גם את
 // הבאדג'ים בבר הניווט (BottomNav), וגם את סינון "לקוחות לא פעילות"
 // ברשימת הלקוחות (ClientsList). ריכוז כאן מונע שכפול לוגיקה בין המסכים.
@@ -131,4 +136,28 @@ export function referralRewards(clients, appts, threshold) {
     if (st.pending > 0) out.push({ client, completedCount, ...st });
   }
   return out.sort((a, b) => b.pending - a.pending || b.completedCount - a.completedCount);
+}
+
+// ---------- מרכז "דורש טיפול" (ניהול עסק) ----------
+// הכנסות בשנה נתונה בלי מספר חשבונית. הכנסות בסכום ₪0 (קיזוז מיתרה) לא נספרות.
+export function incomeMissingInvoice(income, year) {
+  const prefix = String(year);
+  return income.filter(
+    (r) =>
+      (Number(r.amount) || 0) > 0 &&
+      !String(r.invoiceNumber || "").trim() &&
+      String(r.date || "").startsWith(prefix)
+  );
+}
+
+// הוצאות בשנה נתונה בלי תמונה מצורפת. הוצאות שנוצרו אוטומטית מהוצאה קבועה
+// (generatedFrom) לא נספרות — אין להן חשבונית נפרדת לצרף.
+export function expensesMissingReceipt(expenses, year) {
+  const prefix = String(year);
+  return expenses.filter(
+    (r) =>
+      !r.generatedFrom &&
+      !(r.receiptData || r.receiptFileId) &&
+      String(r.date || "").startsWith(prefix)
+  );
 }
