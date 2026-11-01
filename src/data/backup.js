@@ -1,6 +1,7 @@
-import { collection, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
 import { DriveAuthError, isDriveAuthFailure } from "../auth/googleDrive";
+import { normalizeYears, incomeVat, expenseVat, VAT_STATUS_LABEL } from "../utils/vat";
 
 const BACKUP_NAME = "daniel-skin-care-backup.xlsx";
 const XLSX_MIME =
@@ -63,47 +64,88 @@ async function getAll(uid, name) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-// בונה חוברת Excel עם גיליונות הכנסות / הוצאות / לקוחות / חבילות / זיכויים
-// (גיבוי קריא, לא JSON). חייב להישאר תואם ל-BACKUP_COLLECTIONS ב-backupWatermark.js.
+// הגדרות המע"מ (settings/vat) — נדרשות כדי לגזור נטו/מע"מ לכל רשומה, ומופיעות
+// בגיליון נפרד בגיבוי. מסמך שלא קיים → אין שנות מס (פטור, 0%).
+async function getVatYears(uid) {
+  const snap = await getDoc(doc(db, "users", uid, "settings", "vat"));
+  return normalizeYears(snap.exists() ? snap.data().years : []);
+}
+
+// בונה חוברת Excel עם גיליונות הכנסות / הוצאות / לקוחות / חבילות / זיכויים /
+// מע"מ (גיבוי קריא, לא JSON). חייב להישאר תואם ל-BACKUP_COLLECTIONS ב-
+// backupWatermark.js. כותרות הגיליון נכתבות ללא גרשיים (כמו עד כה).
 async function buildWorkbookBase64(uid) {
   const XLSX = await import("xlsx");
-  const [income, expenses, clients, packages, credits] = await Promise.all([
+  const [income, expenses, clients, packages, credits, vatYears] = await Promise.all([
     getAll(uid, "income"),
     getAll(uid, "expenses"),
     getAll(uid, "clients"),
     getAll(uid, "clientPackages"),
     getAll(uid, "credits"),
+    getVatYears(uid),
   ]);
 
   const wb = XLSX.utils.book_new();
 
   const incomeAoa = [
-    ["תאריך", "סכום", "אמצעי תשלום", "מספר חשבונית", "שולם", "לקוחה", "טיפול"],
-    ...income.map((r) => [
-      r.date || "",
-      Number(r.amount) || 0,
-      r.paymentMethod || "",
-      r.invoiceNumber || "",
-      r.paid ? "כן" : "לא",
-      r.clientName || "",
-      r.treatmentName || r.note || "",
-    ]),
+    [
+      "תאריך",
+      "כולל מעמ",
+      "נטו",
+      "מעמ",
+      "מעמ %",
+      "אמצעי תשלום",
+      "מספר חשבונית",
+      "שולם",
+      "לקוחה",
+      "טיפול",
+    ],
+    ...income.map((r) => {
+      const p = incomeVat(r, vatYears);
+      return [
+        r.date || "",
+        p.gross,
+        p.net,
+        p.vat,
+        p.rate,
+        r.paymentMethod || "",
+        r.invoiceNumber || "",
+        r.paid ? "כן" : "לא",
+        r.clientName || "",
+        r.treatmentName || r.note || "",
+      ];
+    }),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(incomeAoa), "הכנסות");
 
   const expenseAoa = [
-    ["תאריך", "תיאור", "שם עסק", "מספר חשבונית", "לפני מעמ", "מעמ", "סהכ", "קטגוריה", "קבועה"],
-    ...expenses.map((r) => [
-      r.date || "",
-      r.description || "",
-      r.businessName || "",
-      r.invoiceNumber || "",
-      Number(r.amountBeforeVat) || 0,
-      Number(r.vat) || 0,
-      Number(r.total) || 0,
-      r.category || "",
-      r.recurring || "",
-    ]),
+    [
+      "תאריך",
+      "תיאור",
+      "שם עסק",
+      "מספר חשבונית",
+      "כולל מעמ",
+      "נטו",
+      "מעמ",
+      "מעמ %",
+      "קטגוריה",
+      "קבועה",
+    ],
+    ...expenses.map((r) => {
+      const p = expenseVat(r, vatYears);
+      return [
+        r.date || "",
+        r.description || "",
+        r.businessName || "",
+        r.invoiceNumber || "",
+        p.gross,
+        p.net,
+        p.vat,
+        p.rate,
+        r.category || "",
+        r.recurring || "",
+      ];
+    }),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expenseAoa), "הוצאות");
 
@@ -150,6 +192,21 @@ async function buildWorkbookBase64(uid) {
     ]),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(creditAoa), "זיכויים");
+
+  // הגדרות המע"מ לכל שנת מס — כדי שהנטו/מע"מ בגליונות יהיו ניתנים לשחזור.
+  const vatAoa = [
+    ["שנת מס", "מתאריך", "עד תאריך", "סטטוס", "מעמ % לפטור", "מעמ %", "מאושרת"],
+    ...vatYears.map((y) => [
+      y.id,
+      y.from,
+      y.to,
+      VAT_STATUS_LABEL[y.status],
+      y.exemptRate,
+      y.rate,
+      y.confirmed ? "כן" : "לא",
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(vatAoa), "מעמ");
 
   const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
   const bytes = new Uint8Array(buf);

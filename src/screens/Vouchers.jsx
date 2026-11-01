@@ -202,7 +202,7 @@ function DefinitionsTab() {
       ) : (
         <>
           <button className="btn btn--block" style={{ marginTop: 16 }} onClick={() => setAdding(true)}>
-            + הוספת הגדרת שובר
+            + הוספת שובר
           </button>
           <button
             className="btn btn--ghost btn--block"

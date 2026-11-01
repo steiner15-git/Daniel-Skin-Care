@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useCollectionData, useBatchRepo } from "./index";
-import { dateInputValue } from "../utils/datetime";
+import { pendingDates } from "../utils/recurring";
 
 // הוצאה קבועה (חודשית/שנתית) נרשמת אוטומטית בכל תקופה שחלפה.
 // אין שרת רקע — הרישום מתבצע בעת טעינת האפליקציה: לכל תבנית קבועה נוצרות
@@ -14,27 +14,11 @@ import { dateInputValue } from "../utils/datetime";
 // תקופה כ"עדיין לא נרשמה" ויוצרת אותה שוב, כי lastPosted לא התעדכן. עם
 // batchRepo, כל התקופות שנוצרו לתבנית נתונה ועדכון lastPosted שלה מצליחים
 // יחד או נכשלים יחד — אין מצב ביניים.
-
-function nextPeriod(dateStr, kind) {
-  const d = new Date(dateStr);
-  if (kind === "yearly") d.setFullYear(d.getFullYear() + 1);
-  else d.setMonth(d.getMonth() + 1);
-  return d;
-}
-
-function pendingDates(template, today) {
-  const anchor = template.lastPosted || template.date;
-  if (!anchor) return [];
-  const dates = [];
-  let cursor = anchor;
-  while (true) {
-    const next = nextPeriod(cursor, template.recurring);
-    if (next > today) break;
-    dates.push(dateInputValue(next));
-    cursor = dateInputValue(next);
-  }
-  return dates;
-}
+//
+// מע"מ: הרשומות שנוצרות מעתיקות מהתבנית את הסכום הכולל ואת הנתונים שקובעים
+// את המע"מ שלה (vatRate ידני, או amountBeforeVat/vat בתבנית ישנה). ערכים
+// חסרים נכתבים כ-null (Firestore אינו מקבל undefined). בתבנית חדשה בלי שיעור
+// ידני — השיעור נגזר משנת המס של תאריך כל רשומה (utils/vat.js).
 
 export function useRecurringExpenses() {
   const { items } = useCollectionData("expenses");
@@ -60,13 +44,14 @@ export function useRecurringExpenses() {
             type: "add",
             data: {
               date,
-              description: t.description,
-              businessName: t.businessName,
+              description: t.description ?? "",
+              businessName: t.businessName ?? "",
               invoiceNumber: "",
-              amountBeforeVat: t.amountBeforeVat,
-              vat: t.vat,
-              total: t.total,
-              category: t.category,
+              total: t.total ?? 0,
+              vatRate: t.vatRate ?? null,
+              amountBeforeVat: t.amountBeforeVat ?? null,
+              vat: t.vat ?? null,
+              category: t.category ?? "",
               recurring: null,
               generatedFrom: t.id,
             },

@@ -29,6 +29,7 @@ const ACTION_LABELS = {
   credit_delete: "מחיקת זיכוי",
   credit_apply: "קיזוז מיתרת זיכוי",
   credit_restore: "החזרת יתרת זיכוי",
+  vat_year_edit: 'עריכת הגדרות מע"מ',
 };
 
 const CURRENT_YEAR = new Date().getFullYear();

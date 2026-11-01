@@ -38,6 +38,7 @@ import BusinessDetails from "./screens/settings/BusinessDetails";
 import Treatments from "./screens/settings/Treatments";
 import Invitation from "./screens/settings/Invitation";
 import Reminders from "./screens/settings/Reminders";
+import VatSettings from "./screens/settings/VatSettings";
 import ExpenseCategories from "./screens/settings/ExpenseCategories";
 import PaymentMethods from "./screens/settings/PaymentMethods";
 import WorkingHours from "./screens/settings/WorkingHours";
@@ -108,6 +109,7 @@ export default function App() {
               <Route path="settings/treatments" element={<Treatments />} />
               <Route path="settings/invitation" element={<Invitation />} />
               <Route path="settings/reminders" element={<Reminders />} />
+              <Route path="settings/vat" element={<VatSettings />} />
               <Route
                 path="settings/expense-categories"
                 element={<ExpenseCategories />}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { runBackup } from "./backup";
-import { IS_LOCAL, useCollectionData } from "./index";
+import { IS_LOCAL, useCollectionData, useSettingDoc } from "./index";
 import { markBackupSuccess, markBackupError, markBackupSkipped } from "./backupStatus";
 import { maxUpdatedAt, readBackupWatermark, writeBackupWatermark } from "./backupWatermark";
 
@@ -78,10 +78,15 @@ export function useAutoBackup() {
   const { items: clients } = useCollectionData("clients");
   const { items: clientPackages } = useCollectionData("clientPackages");
   const { items: credits } = useCollectionData("credits");
+  // הגדרות המע"מ משפיעות על תוכן הגיבוי (נטו/מע"מ נגזרים מהן) בלי לשנות
+  // updatedAt של אף רשומה — לכן נכללות בחישוב ה-watermark.
+  const { data: vatDoc } = useSettingDoc("vat");
 
+  const vatUpdatedKey = JSON.stringify(vatDoc?.updatedAt ?? null);
   const currentMax = useMemo(
-    () => maxUpdatedAt({ income, expenses, clients, clientPackages, credits }),
-    [income, expenses, clients, clientPackages, credits]
+    () => maxUpdatedAt({ income, expenses, clients, clientPackages, credits }, [vatDoc]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [income, expenses, clients, clientPackages, credits, vatUpdatedKey]
   );
   // ref, לא state: הערך העדכני נדרש בתוך run() שרץ מתוך setTimeout/
   // setInterval שנקבעו פעם אחת ב-mount (תלוי רק ב-user) — closure רגיל

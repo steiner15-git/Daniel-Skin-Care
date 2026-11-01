@@ -2,9 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import ClientPicker from "../../components/ClientPicker";
+import VatFields from "../../components/VatFields";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { useVatSettings } from "../../data/useVatSettings";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { formatILS } from "../../utils/money";
 import { dateInputValue } from "../../utils/datetime";
+import { taxYearFor, effectiveRate, clampRate } from "../../utils/vat";
 import ReceiptField from "../../components/ReceiptField";
 
 // שדה "פירוט / טיפול" להכנסה ידנית: טקסט חופשי עם הצעות מרשימת הטיפולים
@@ -56,6 +60,14 @@ function TreatmentField({ value, onChange, treatments }) {
   );
 }
 
+// תווית מקור להכנסה שנוצרה אוטומטית — להסבר באזהרת העריכה.
+const AUTO_SOURCE_LABEL = {
+  appointment: "סגירת תור",
+  series: "רכישת סדרה",
+  product: "מכירת מוצר",
+  voucher: "רכישת שובר מתנה",
+};
+
 export default function IncomeForm() {
   const { id } = useParams();
   const isEdit = !!id;
@@ -67,6 +79,8 @@ export default function IncomeForm() {
   const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const treatments = treatmentsDoc?.items ?? [];
+  const { years } = useVatSettings();
+  const confirmDialog = useConfirm();
 
   const editing = isEdit ? items.find((r) => r.id === id) : null;
   // הכנסה שנוצרה אוטומטית (מתור / רכישת סדרה / מכירת מוצר) — הלקוחה והשיוך
@@ -86,9 +100,12 @@ export default function IncomeForm() {
     receiptFileId: null,
     receiptMime: null,
   });
+  // שיעור מע"מ ידני (מחרוזת). null = ברירת המחדל לפי שנת המס של התאריך —
+  // נגזר בזמן רינדור, כך שמשתנה עם התאריך ועם טעינת ההגדרות.
+  const [rateInput, setRateInput] = useState(null);
 
   useEffect(() => {
-    if (editing)
+    if (editing) {
       setForm({
         ...form,
         ...editing,
@@ -101,6 +118,8 @@ export default function IncomeForm() {
         clientId: editing.clientId || "",
         clientName: editing.clientName || "",
       });
+      setRateInput(editing.vatRate != null ? String(editing.vatRate) : null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing?.id]);
 
@@ -108,7 +127,30 @@ export default function IncomeForm() {
     setForm((f) => ({ ...f, ...patch }));
   }
 
+  const defaultRate = effectiveRate(taxYearFor(form.date, years));
+  const manualRate = rateInput != null;
+  const shownRate = manualRate ? rateInput : String(defaultRate);
+
+  // אזהרה (לא חוסמת): מספר חשבונית זהה כבר קיים בהכנסה אחרת.
+  const invTrim = form.invoiceNumber.trim();
+  const duplicateInvoice =
+    !!invTrim &&
+    items.some((r) => r.id !== id && String(r.invoiceNumber || "").trim() === invTrim);
+
   async function save() {
+    // הכנסה שנוצרה אוטומטית: שינוי סכום לא מעדכן את התור/החבילה/המלאי/היתרה
+    // שמאחוריה — מבקשים אישור מפורש לפני שמירה.
+    if (isEdit && editing && !isManual && Number(form.amount) !== Number(editing.amount)) {
+      const ok = await confirmDialog({
+        title: "שינוי סכום בהכנסה אוטומטית",
+        message: `הכנסה זו נוצרה אוטומטית מ${
+          AUTO_SOURCE_LABEL[editing.source] || "פעולה אחרת"
+        }. שינוי הסכום כאן לא יעדכן את התור, החבילה, המלאי או היתרה המקושרים אליה. לשנות בכל זאת?`,
+        confirmLabel: "שינוי בכל זאת",
+        danger: true,
+      });
+      if (!ok) return;
+    }
     const linkedTreatment = isManual
       ? treatments.find((t) => t.name === form.note.trim()) || null
       : null;
@@ -134,6 +176,9 @@ export default function IncomeForm() {
       // treatmentId נשמר רק להכנסה ידנית, וכשהשם תואם טיפול מהרשימה.
       ...(isManual ? { treatmentId: linkedTreatment?.id || null } : {}),
       source: editing?.source || "manual",
+      // מע"מ: נשמר רק שיעור שנערך ידנית; אחרת null והשיעור נגזר משנת המס
+      // (ראו utils/vat.js). הנטו והמע"מ אינם נשמרים.
+      vatRate: manualRate ? clampRate(rateInput) : null,
       receiptData: form.receiptData || null,
       receiptFileId: form.receiptFileId || null,
       receiptMime: form.receiptMime || null,
@@ -143,8 +188,18 @@ export default function IncomeForm() {
       await log({
         action: "income_edit",
         entity: { type: "income", id, desc: `${payload.treatmentName || "הכנסה"} · ${formatILS(payload.amount)}` },
-        before: { amount: editing.amount, paid: editing.paid, invoiceNumber: editing.invoiceNumber },
-        after: { amount: payload.amount, paid: payload.paid, invoiceNumber: payload.invoiceNumber },
+        before: {
+          amount: editing.amount,
+          paid: editing.paid,
+          invoiceNumber: editing.invoiceNumber,
+          vatRate: editing.vatRate ?? null,
+        },
+        after: {
+          amount: payload.amount,
+          paid: payload.paid,
+          invoiceNumber: payload.invoiceNumber,
+          vatRate: payload.vatRate,
+        },
       });
     } else {
       await repo.add(payload);
@@ -163,13 +218,20 @@ export default function IncomeForm() {
         }
       />
 
+      {editing && !isManual && (
+        <div className="notice" style={{ marginTop: 0 }}>
+          הכנסה זו נוצרה אוטומטית מ{AUTO_SOURCE_LABEL[editing.source] || "פעולה אחרת"}. שינוי
+          הסכום כאן לא יעדכן את הרשומה המקורית.
+        </div>
+      )}
+
       <div className="card">
         <div className="row-2">
           <div className="field">
-            <label>סכום (₪)</label>
+            <label>סכום כולל מע"מ (₪)</label>
             <input
               type="number"
-              inputMode="numeric"
+              inputMode="decimal"
               min="0"
               value={form.amount}
               onChange={(e) => set({ amount: e.target.value })}
@@ -189,7 +251,20 @@ export default function IncomeForm() {
             value={form.invoiceNumber}
             onChange={(e) => set({ invoiceNumber: e.target.value })}
           />
+          {duplicateInvoice && (
+            <p className="warn-text">⚠ קיימת הכנסה אחרת עם אותו מספר חשבונית (ניתן להמשיך).</p>
+          )}
         </div>
+
+        {/* מע"מ: עורכים סכום כולל (למעלה) או שיעור; נטו ומע"מ מחושבים */}
+        <VatFields
+          gross={Number(form.amount) || 0}
+          rate={shownRate}
+          manual={manualRate}
+          defaultRate={defaultRate}
+          onRateChange={setRateInput}
+          onReset={() => setRateInput(null)}
+        />
 
         <div className="field">
           <label>אמצעי תשלום</label>

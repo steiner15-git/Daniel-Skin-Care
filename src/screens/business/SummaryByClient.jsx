@@ -3,8 +3,11 @@ import { useNavigate } from "react-router-dom";
 import YearMonthNav from "../../components/YearMonthNav";
 import StackedBarChart from "./StackedBarChart";
 import { useCollectionData } from "../../data";
+import { useVatSettings } from "../../data/useVatSettings";
 import { useClinicMode } from "../../context/ClinicModeProvider";
 import { formatILS, HEB_MONTHS } from "../../utils/money";
+import { incomeRevenue } from "../../utils/vat";
+import { periodRange } from "../../utils/period";
 import { summarizeByClient } from "../../utils/incomeCategorize";
 import { colorForIndex } from "../../utils/chartColors";
 
@@ -13,10 +16,19 @@ const CURRENT_MONTH = new Date().getMonth();
 const OTHERS_COLOR = "#b8b0a3";
 const TOP_N = 10;
 
-export default function SummaryByClient() {
+export default function SummaryByClient({ onDrill }) {
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
-  const { items: income } = useCollectionData("income");
+  const { items: rawIncome } = useCollectionData("income");
+  const { years: vatYears } = useVatSettings();
+
+  // מע"מ: בשנת מורשה הסיכום מציג נטו, בשנת פטור סכום כולל — אותה התאמה בדיוק
+  // כמו בטאב "כללי" (utils/vat.js). ממפים כאן פעם אחת את amount, וכל החישובים
+  // שמתחת ממשיכים כרגיל מעליו.
+  const income = useMemo(
+    () => rawIncome.map((r) => ({ ...r, amount: incomeRevenue(r, vatYears) })),
+    [rawIncome, vatYears]
+  );
 
   const [year, setYear] = useState(CURRENT_YEAR);
   const [month, setMonth] = useState(CURRENT_MONTH);
@@ -123,6 +135,22 @@ export default function SummaryByClient() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <strong>{formatILS(x.amount)}</strong>
+                  {onDrill && x.key !== "none" && (
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDrill({
+                          tab: "income",
+                          year,
+                          ...periodRange(year, month, viewMode),
+                          q: x.clientName,
+                        });
+                      }}
+                    >
+                      הכנסות ‹
+                    </button>
+                  )}
                   {x.clientId && (
                     <button
                       className="btn btn--ghost btn--sm"

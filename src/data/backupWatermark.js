@@ -7,6 +7,11 @@
 //
 // היתרון על פני דגל-כתיבה: שכבת ה-repo (data/firestore.js / data/localStore.js)
 // לא צריכה "לדעת" כלל על גיבוי — הפרדת אחריות נקייה יותר.
+//
+// מע"מ: נטו ומע"מ נגזרים מ-settings/vat בזמן קריאה, ולכן שינוי בהגדרות (למשל
+// מעבר רטרואקטיבי לעוסק מורשה) משנה את תוכן הגיבוי בלי לשנות updatedAt של אף
+// רשומה. מסמכי הגדרות כאלה מועברים ל-maxUpdatedAt כ-extraDocs, והגיבוי החכם
+// מזהה גם אותם.
 
 const WATERMARK_KEY = "dsc:driveBackupWatermark";
 
@@ -29,13 +34,18 @@ function toMillis(updatedAt) {
 // collectionsByName: { income: [...], expenses: [...], clients: [...],
 // clientPackages: [...], credits: [...] } — כפי שמתקבל מ-useCollectionData
 // בכל אחת מהן (ראו useAutoBackup.js).
-export function maxUpdatedAt(collectionsByName) {
+// extraDocs: מסמכי הגדרות (או null) שמשפיעים על תוכן הגיבוי, למשל settings/vat.
+export function maxUpdatedAt(collectionsByName, extraDocs = []) {
   let max = 0;
   for (const name of BACKUP_COLLECTIONS) {
     for (const item of collectionsByName[name] || []) {
       const t = toMillis(item.updatedAt);
       if (t > max) max = t;
     }
+  }
+  for (const doc of extraDocs) {
+    const t = toMillis(doc?.updatedAt);
+    if (t > max) max = t;
   }
   return max;
 }

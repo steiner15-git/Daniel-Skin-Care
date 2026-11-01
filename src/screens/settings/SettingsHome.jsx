@@ -7,6 +7,7 @@ const SECTIONS = [
   { to: "/settings/treatments", title: "רשימת טיפולים", desc: "שם, משך ומחיר לכל טיפול" },
   { to: "/settings/invitation", title: "תבניות", desc: "תוכן הזימון ללקוחה ותוכן הודעת השובר" },
   { to: "/settings/reminders", title: "תזכורות", desc: "אימות תשלום, לקוחות לא פעילות ובאדג'ים בניווט" },
+  { to: "/settings/vat", title: 'מע"מ ושנות מס', desc: 'סטטוס עוסק ושיעורי מע"מ לפי שנת מס' },
   { to: "/settings/expense-categories", title: "קטגוריות הוצאה", desc: "רשימת קטגוריות להוצאות" },
   { to: "/settings/payment-methods", title: "אמצעי תשלום", desc: "מזומן, אשראי, ביט ועוד" },
   { to: "/settings/hours", title: "שעות פעילות", desc: "ימי עבודה ושעות (התראה בלבד)" },
