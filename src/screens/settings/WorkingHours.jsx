@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
+import TimeField from "../../components/TimeField";
 import { useSettingDoc } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 
@@ -29,7 +30,6 @@ export default function WorkingHours() {
     setSaved(false);
   }
 
-  // תוקן QA (2026-09): נוסף try/catch.
   async function onSave() {
     try {
       await save({ days });
@@ -55,7 +55,8 @@ export default function WorkingHours() {
 
       <div className="list">
         {DAY_NAMES.map((name, i) => (
-          <div key={i} className="card day-row">
+          // flexWrap: שני שדות שעה (4 תפריטים) לא תמיד נכנסים בשורה אחת במסך צר.
+          <div key={i} className="card day-row" style={{ flexWrap: "wrap" }}>
             <label className="day-row__toggle">
               <input
                 type="checkbox"
@@ -66,17 +67,10 @@ export default function WorkingHours() {
             </label>
             {days[i].enabled ? (
               <div className="day-row__times">
-                <input
-                  type="time"
-                  value={days[i].start}
-                  onChange={(e) => update(i, { start: e.target.value })}
-                />
+                {/* TimeField: שעה ב-24 שעות מובטחת (בלי AM/PM לפי לוקאל הדפדפן) */}
+                <TimeField value={days[i].start} onChange={(t) => update(i, { start: t })} />
                 <span className="muted">עד</span>
-                <input
-                  type="time"
-                  value={days[i].end}
-                  onChange={(e) => update(i, { end: e.target.value })}
-                />
+                <TimeField value={days[i].end} onChange={(t) => update(i, { end: t })} />
               </div>
             ) : (
               <span className="muted">סגור</span>

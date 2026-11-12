@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import TimeField from "../../components/TimeField";
 import { useCollectionData, useRepo } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import { combine, formatTime, dateInputValue } from "../../utils/datetime";
+import { goBackOr } from "../../utils/nav";
 
 function minutesBetween(startTime, endTime) {
   const [sh, sm] = startTime.split(":").map(Number);
@@ -16,9 +18,12 @@ export default function EventForm() {
   const { id } = useParams();
   const isEdit = !!id;
   const navigate = useNavigate();
+  const location = useLocation();
   const { items: events } = useCollectionData("events");
   const repo = useRepo("events");
   const confirmDialog = useConfirm();
+  const toast = useToast();
+
   const editing = isEdit ? events.find((e) => e.id === id) : null;
 
   const [form, setForm] = useState({
@@ -66,7 +71,8 @@ export default function EventForm() {
     try {
       if (isEdit) await repo.update(id, payload);
       else await repo.add(payload);
-      navigate("/calendar", { replace: true });
+      toast.showMessage(isEdit ? "האירוע עודכן ✓" : "האירוע נוסף ✓");
+      navigate(location.state?.returnTo || `/calendar?date=${form.date}`, { replace: true });
     } catch (e) {
       setSaving(false);
       await confirmDialog({
@@ -82,7 +88,7 @@ export default function EventForm() {
       <ScreenHeader
         title={isEdit ? "עריכת אירוע" : "אירוע חדש"}
         action={
-          <button className="btn btn--ghost" onClick={() => navigate("/calendar")}>
+          <button className="btn btn--ghost" onClick={() => goBackOr(navigate, "/calendar")}>
             ליומן
           </button>
         }

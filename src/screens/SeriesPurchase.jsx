@@ -2,8 +2,9 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import CreditOffsetField from "../components/CreditOffsetField";
-import { useCollectionData, useBatchRepo, useSettingDoc, useAuditLog } from "../data";
+import { useCollectionData, useBatchRepo, useAuditLog } from "../data";
 import { useConfirm } from "../context/ConfirmDialogProvider";
+import { useToast } from "../context/ToastProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
 import { dateInputValue } from "../utils/datetime";
@@ -14,12 +15,13 @@ import {
   round2,
   creditLabel,
 } from "../utils/credits";
+import { usePaymentMethods } from "../data/useListSettings";
 
 export default function SeriesPurchase() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const backTo = location.state?.from === "series" ? "/series" : "/";
+  const backTo = location.state?.from === "series" ? "/series?tab=purchases" : "/";
 
   const { items: series, loading } = useCollectionData("series");
   const { items: clients } = useCollectionData("clients");
@@ -30,10 +32,10 @@ export default function SeriesPurchase() {
   // שתי קריאות repo נפרדות (incomeRepo.add + packageRepo.add); כשל רשת בין
   // השתיים היה יכול להשאיר רשומת הכנסה בלי חבילת לקוחה תואמת (או להפך).
   const batchRepo = useBatchRepo();
-  const { data: pmDoc } = useSettingDoc("paymentMethods");
-  const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+  const { items: methods } = usePaymentMethods();
   const log = useAuditLog();
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const s = series.find((x) => x.id === id);
 
@@ -152,6 +154,7 @@ export default function SeriesPurchase() {
         },
       });
       await batchRepo.commit(ops);
+      toast.showMessage("הרכישה נרשמה ✓");
     } catch (e) {
       setSaving(false);
       await confirmDialog({

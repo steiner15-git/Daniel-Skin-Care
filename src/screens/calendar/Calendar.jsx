@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
@@ -11,26 +11,67 @@ import {
   formatDate,
   sameDay,
   monthLabel,
+  dateInputValue,
+  pad,
 } from "../../utils/datetime";
 
 const WEEK = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
 
+// פרמטרי URL של היומן: ?view=list|pending (ללא = לוח שנה), ?date=YYYY-MM-DD
+// (היום הנבחר), ?month=YYYY-MM (החודש המוצג). הם מסתנכרנים עם מצב המסך
+// (ב-replace, בלי להוסיף רשומות להיסטוריה) — כך שחזרה ליומן אחרי קביעת תור,
+// עריכה, אישור ביצוע או שליחת זימון מחזירה לאותו חודש/יום/תצוגה, ולא
+// ל"היום". מסכים אחרים יכולים לקשר ישירות ל-/calendar?date=YYYY-MM-DD.
+function parseDateParam(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || "");
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return isNaN(d) ? null : d;
+}
+function parseMonthParam(s) {
+  const m = /^(\d{4})-(\d{2})$/.exec(s || "");
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  return isNaN(d) ? null : d;
+}
+
 export default function Calendar() {
   const navigate = useNavigate();
+  const location = useLocation();
   const confirmDialog = useConfirm();
   const toast = useToast();
   const log = useAuditLog();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
 
   // תצוגות: month (לוח שנה) | list (רשימה) | pending (ממתינים לסגירה). כניסה
   // ישירה לתצוגת הממתינים דרך /calendar?view=pending (מרכז "דורש טיפול" בניהול
   // עסק, ו"הצג הכל" בדשבורד), וגם חזרה אליה אחרי אישור ביצוע (CloseAppointment).
-  const [view, setView] = useState(params.get("view") === "pending" ? "pending" : "month");
-  const [cursor, setCursor] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
+  const [view, setView] = useState(() => {
+    const v = params.get("view");
+    return v === "pending" || v === "list" ? v : "month";
   });
-  const [selected, setSelected] = useState(new Date());
+  const initialSelected = useMemo(
+    () => parseDateParam(params.get("date")) || new Date(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+  const [selected, setSelected] = useState(initialSelected);
+  const [cursor, setCursor] = useState(
+    () =>
+      parseMonthParam(params.get("month")) ||
+      new Date(initialSelected.getFullYear(), initialSelected.getMonth(), 1)
+  );
+
+  // סנכרון המצב ל-URL (replace). אם התוצאה זהה ל-URL הנוכחי — לא עושים כלום.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (view !== "month") next.set("view", view);
+    next.set("date", dateInputValue(selected));
+    next.set("month", `${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}`);
+    if (next.toString() !== params.toString()) setParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selected, cursor]);
+
   const [filters, setFilters] = useState({ showPast: true, showEvents: true, treatment: "" });
   const [sortBy, setSortBy] = useState("date");
   // אירועים שנמחקו אופטימית ל-Undo (ראו ToastProvider).
@@ -39,25 +80,16 @@ export default function Calendar() {
   // Phase 4 §9 — appointments מוגבלים לשנה המוצגת כרגע ביומן (cursor), במקום
   // טעינת כל ההיסטוריה מאז ומתמיד. מתעדכן אוטומטית כשעוברים לשנה אחרת.
   //
-  // תוקן QA (2026-09): income *אינו* מוגבל לשנה — נשאב במלואו, כמו
-  // ב-ClientCard.jsx/BottomNav.jsx/Dashboard.jsx. ההנחה הקודמת ("הכנסה כמעט
-  // תמיד נרשמת באותה שנה שבה נסגר התור") בלבלה בין "שנת סגירת התור" לבין
-  // "שנת התור המוצג ביומן" (cursor.getFullYear()): שדה "תאריך תשלום" ב-
-  // CloseAppointment.jsx ברירת המחדל שלו היא היום, לא תאריך התור — כך שתור
-  // מסוף שנה קלנדרית שנסגר בתחילת השנה הבאה יוצר רשומת income בשנה השונה
-  // משנת התור. עם income מוגבל לאותה שנה כמו appointments, incomeById
-  // לא מוצא את ההכנסה, וה-UI מציג "בוצע · לא שולם" גם כשהתשלום כבר אומת —
-  // מידע כוזב על מצב תשלום. income אינו כבד כמו appointments (אין צורך
-  // ב-year-scoping כדי לשמור על ביצועים), וכל שאר המסכים כבר שואבים אותו
-  // במלואו — כך שברוב המקרים אין אפילו עלות רשת נוספת (מנוי משותף קיים).
+  // income *אינו* מוגבל לשנה — נשאב במלואו (ראו תיקון QA 2026-09): שדה "תאריך
+  // תשלום" בסגירת תור הוא ברירת מחדל היום, לא תאריך התור, ולכן הכנסה של תור
+  // מסוף שנה עלולה להירשם בשנה אחרת, והסטטוס "שולם" היה מוצג שגוי.
   const year = cursor.getFullYear();
   const { items: appts, loading: la } = useYearRangeCollectionData("appointments", "start", year);
   const { items: events, loading: le } = useCollectionData("events");
   const { items: income } = useCollectionData("income");
   // כל התורים (מנוי משותף — BottomNav כבר מנוי עליהם, ללא עלות רשת נוספת): נדרש
-  // לתצוגת "ממתינים", כי תור ממתין עשוי להיות משנה קודמת, ולא להופיע בטעינה
-  // המוגבלת לשנה המוצגת. אותה פונקציה (pendingClosureAppts) שמזינה את הבאדג'
-  // בבר התחתון ואת מרכז "דורש טיפול", כך שהמספר זהה בכל המקומות.
+  // לתצוגת "ממתינים", כי תור ממתין עשוי להיות משנה קודמת. אותה פונקציה
+  // (pendingClosureAppts) שמזינה את הבאדג' בבר התחתון ואת מרכז "דורש טיפול".
   const { items: allAppts, loading: lp } = useCollectionData("appointments");
   const apptRepo = useRepo("appointments");
   const eventRepo = useRepo("events");
@@ -125,7 +157,6 @@ export default function Calendar() {
   // Phase 4 §5 — מעקב ביטולים: אותו מנגנון reasonOptions בדיוק כמו
   // CloseAppointment.jsx's cancelAppt(), כדי ששתי נקודות הביטול (יומן /
   // אישור ביצוע) יתעדו סיבה באופן זהה ויכתבו לאותו שדה cancelReason.
-  // entity.desc כולל את התווית הקריאה של הסיבה (לא רק הערך הגולמי ב-after).
   async function cancelAppt(it) {
     const reason = await confirmDialog({
       title: "ביטול תור",
@@ -135,18 +166,33 @@ export default function Calendar() {
       reasonOptions: CANCEL_REASONS,
     });
     if (!reason) return;
-    await apptRepo.update(it.id, { status: "cancelled", cancelReason: reason });
-    await log({
-      action: "appointment_cancel",
-      entity: {
-        type: "appointment",
-        id: it.id,
-        desc: `${it.title}${it.subtitle ? ` · ${it.subtitle}` : ""} · ${
-          CANCEL_REASON_LABELS[reason] || reason
-        }`,
-      },
-      after: { cancelReason: reason },
-    });
+    try {
+      await apptRepo.update(it.id, { status: "cancelled", cancelReason: reason });
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "ביטול התור נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
+    // כשל בלוג אחרי שהביטול הצליח לא אמור להציג "הביטול נכשל".
+    try {
+      await log({
+        action: "appointment_cancel",
+        entity: {
+          type: "appointment",
+          id: it.id,
+          desc: `${it.title}${it.subtitle ? ` · ${it.subtitle}` : ""} · ${
+            CANCEL_REASON_LABELS[reason] || reason
+          }`,
+        },
+        after: { cancelReason: reason },
+      });
+    } catch (e) {
+      console.error("[audit] appointment_cancel failed", e);
+    }
+    toast.showMessage("התור בוטל");
   }
   async function deleteEvent(it) {
     const ok = await confirmDialog({
@@ -171,8 +217,12 @@ export default function Calendar() {
 
   // מעבר למסך אישור ביצוע. from קובע לאן חוזרים אחרי האישור/הביטול: "calendar"
   // → לוח השנה; "pending" → תצוגת הממתינים (כדי לסגור כמה תורים ברצף).
+  // returnTo: ה-URL המלא של היומן כרגע (תצוגה + חודש + יום), כך שאחרי האישור
+  // חוזרים בדיוק לאותו מצב ולא ל"היום" (CloseAppointment קורא אותו).
   const closeFrom = (from) => (it) =>
-    navigate(`/appointments/${it.id}/close`, { state: { from } });
+    navigate(`/appointments/${it.id}/close`, {
+      state: { from, returnTo: location.pathname + location.search },
+    });
 
   const loading = view === "pending" ? lp : la || le;
 

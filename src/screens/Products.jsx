@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import PaymentBadge from "../components/PaymentBadge";
 import { SkeletonRows } from "../components/Skeleton";
@@ -13,7 +13,8 @@ const EMPTY = { name: "", price: "", stock: "", lowStockThreshold: "" };
 
 export default function Products() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState("products");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get("tab") === "sales" ? "sales" : "products");
 
   return (
     <>
@@ -140,7 +141,7 @@ function InventoryTab() {
                       <span className="badge badge--warn">מלאי נמוך</span>
                     ) : null}
                   </strong>
-                  <span className="muted">
+                  <span className="sensitive">
                     {formatILS(p.price)} · במלאי: {p.stock ?? 0}
                   </span>
                 </div>
@@ -333,7 +334,7 @@ function SalesTab() {
             <div key={r.id} className="card fin-item">
               <div className="fin-item__main">
                 <div className="fin-item__top">
-                  <strong>{formatILS(r.amount)}</strong>
+                  <strong className="sensitive">{formatILS(r.amount)}</strong>
                   <PaymentBadge income={r} />
                 </div>
                 <span className="muted">

@@ -11,6 +11,9 @@ const CAP = 5;
 // קטגוריות בסדר קבוע: לקוחות → הכנסות/הוצאות → חבילות/סדרות → תמונות
 // אלבום. כל הנתונים כבר נטענים ע"י useCollectionData בזמן אמת בכל מקרה
 // (שום קריאת רשת נוספת) — כאן רק סינון בזיכרון, ורק כשיש טקסט בשדה.
+//
+// מצב קליניקה: טלפונים וסכומים בתוצאות מסומנים .sensitive (טשטוש), כי החיפוש
+// נפתח מכל מסך — גם כשהטלפון מוצג מול לקוחה.
 export default function GlobalSearch({ onClose }) {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
@@ -142,7 +145,7 @@ export default function GlobalSearch({ onClose }) {
                       {c.archived ? " · בארכיון" : ""}
                     </span>
                     {c.phone && (
-                      <span className="muted" dir="ltr">
+                      <span className="muted sensitive" dir="ltr">
                         {c.phone}
                       </span>
                     )}
@@ -170,7 +173,10 @@ export default function GlobalSearch({ onClose }) {
                       {r.clientName ? ` · ${r.clientName}` : r.businessName ? ` · ${r.businessName}` : ""}
                     </span>
                     <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>
-                      {formatDate(r.date)} · {formatILS(r.__kind === "income" ? r.amount : r.total)}
+                      {formatDate(r.date)} ·{" "}
+                      <span className="sensitive">
+                        {formatILS(r.__kind === "income" ? r.amount : r.total)}
+                      </span>
                     </span>
                   </button>
                 )}

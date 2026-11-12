@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import { SkeletonRows } from "../components/Skeleton";
@@ -18,6 +18,8 @@ import { formatTime, formatDate, sameDay } from "../utils/datetime";
 import { fullName, ageFromBirthday } from "./clients/clientUtils";
 
 const CAP = 3;
+// כל כמה זמן הלו"ז מתעדכן ("מתקיים כעת", נעלמים פריטים שהסתיימו).
+const TICK_MS = 30000;
 
 function GearButton() {
   const navigate = useNavigate();
@@ -54,8 +56,22 @@ export default function Dashboard() {
   const { years: vatYears, loading: loadingVat } = useVatSettings();
   const { data: business } = useSettingDoc("business");
 
-  const now = Date.now();
-  const today = new Date();
+  // "עכשיו" כ-state שמתעדכן אחת ל-TICK_MS וגם כשהאפליקציה חוזרת לחזית (PWA
+  // שנפתחת אחרי זמן ברקע). קודם now היה Date.now() בכל רינדור, ולכן "מתקיים
+  // כעת" ופריטים שהסתיימו התעדכנו רק אם משהו אחר גרם לרינדור.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), TICK_MS);
+    function onVisible() {
+      if (document.visibilityState === "visible") setNow(Date.now());
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+  const today = new Date(now);
 
   const todayItems = useMemo(() => {
     const a = appts
@@ -75,6 +91,13 @@ export default function Dashboard() {
       .sort((x, y) => new Date(x.start) - new Date(y.start));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appts, events, now]);
+
+  // לחיצה על שורה בלו"ז: תור → עריכת התור; אירוע → עריכת האירוע. returnTo מחזיר
+  // למסך הבית אחרי השמירה (AppointmentForm / EventForm קוראים אותו).
+  function openScheduleItem(it) {
+    if (it.type === "appt") navigate(`/appointments/${it.id}/edit`, { state: { returnTo: "/" } });
+    else navigate(`/calendar/event/${it.id}/edit`, { state: { returnTo: "/" } });
+  }
 
   // "ממתינים לסגירה" — לוגיקה משותפת עם הבאדג' על אייקון היומן (BottomNav).
   const pending = useMemo(
@@ -142,19 +165,21 @@ export default function Dashboard() {
       ) : (
         <div className="list">
           {todayItems.map((it) => (
-            <div
+            <button
               key={it.type + it.id}
               className={
-                "card list-item" +
+                "card list-item as-button" +
                 (it.type === "event" ? " list-item--event" : "") +
                 (it.inProgress ? " list-item--now" : "")
               }
+              onClick={() => openScheduleItem(it)}
             >
               <div className="list-item__main">
                 <strong>{formatTime(it.start)} · {it.title}</strong>
                 <span className="muted">{it.sub}{it.inProgress ? " · מתקיים כעת" : ""}</span>
               </div>
-            </div>
+              <span className="nav-card__chev">‹</span>
+            </button>
           ))}
         </div>
       )}

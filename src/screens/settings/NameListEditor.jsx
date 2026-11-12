@@ -1,6 +1,7 @@
 import { useState } from "react";
 import SettingsSubHeader from "./SettingsSubHeader";
 import { useSettingDoc } from "../../data";
+import { defaultItems } from "../../data/useListSettings";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { useToast } from "../../context/ToastProvider";
 
@@ -18,7 +19,9 @@ export default function NameListEditor({
 }) {
   const { data, loading, save } = useSettingDoc(docKey);
   const items = data?.items ?? null;
-  const fullList = items ?? defaults.map((name) => ({ id: newId(docKey), name }));
+  // מזהים יציבים לברירות המחדל (defaultItems) — קודם נוצרו מזהים חדשים בכל
+  // רינדור, ולכן עריכה/מחיקה של פריט לפני השמירה הראשונה לא עבדו.
+  const fullList = items ?? defaultItems(docKey, defaults);
   const confirmDialog = useConfirm();
   const toast = useToast();
 
@@ -30,10 +33,6 @@ export default function NameListEditor({
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const list = fullList.filter((x) => !hiddenIds.has(x.id));
 
-  // תוקן QA (2026-09): persist() משותף להוספה/עריכה/מחיקה — נוסף try/catch
-  // כדי שכשל Firestore יוצג כהודעת שגיאה במקום להיכשל בשקט. מחיקה (הקריאה
-  // מ-onExpire של ה-Undo) לא מציגה שגיאה על גבי מסך שכבר "עבר הלאה" —
-  // ה-console.error נשאר לצורכי דיבוג, וה-UI כבר הציג את הפריט כנמחק.
   async function persist(next) {
     try {
       await save({ items: next });
@@ -52,6 +51,8 @@ export default function NameListEditor({
     setDraft("");
   }
   function saveEdit() {
+    // שם ריק אינו נשמר.
+    if (!editText.trim()) return;
     persist(fullList.map((x) => (x.id === editId ? { ...x, name: editText.trim() } : x)));
     setEditId(null);
   }
@@ -94,7 +95,7 @@ export default function NameListEditor({
                 <button className="btn btn--muted" onClick={() => setEditId(null)}>
                   ביטול
                 </button>
-                <button className="btn" onClick={saveEdit}>
+                <button className="btn" disabled={!editText.trim()} onClick={saveEdit}>
                   שמירה
                 </button>
               </div>

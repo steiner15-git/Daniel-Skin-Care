@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import DateField from "../components/DateField";
 import { SkeletonRows } from "../components/Skeleton";
@@ -16,7 +16,8 @@ const EMPTY = { name: "", amount: "", expiryDate: "" };
 // מהירות במסך הבית (שלב 5), לא מהבר התחתון.
 export default function Vouchers() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState("definitions");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get("tab") === "purchases" ? "purchases" : "definitions");
 
   return (
     <>
@@ -159,7 +160,7 @@ function DefinitionsTab() {
               <div key={v.id} className="card list-item">
                 <div className="list-item__main">
                   <strong>{v.name}</strong>
-                  <span className="muted">
+                  <span className="sensitive">
                     {formatILS(v.amount)}
                     {v.expiryDate ? ` · בתוקף עד ${v.expiryDate}` : " · ללא תוקף"}
                   </span>

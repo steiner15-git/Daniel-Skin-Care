@@ -4,12 +4,18 @@ import ScreenHeader from "../../components/ScreenHeader";
 import ClientPicker from "../../components/ClientPicker";
 import VatFields from "../../components/VatFields";
 import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { usePaymentMethods } from "../../data/useListSettings";
 import { useVatSettings } from "../../data/useVatSettings";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import { formatILS } from "../../utils/money";
 import { dateInputValue } from "../../utils/datetime";
 import { taxYearFor, effectiveRate, clampRate } from "../../utils/vat";
+import { goBackOr } from "../../utils/nav";
 import ReceiptField from "../../components/ReceiptField";
+
+// מסך ברירת מחדל כשאין מסך קודם באפליקציה (כניסה ישירה): לשונית ההכנסות.
+const FALLBACK = "/business?tab=income";
 
 // שדה "פירוט / טיפול" להכנסה ידנית: טקסט חופשי עם הצעות מרשימת הטיפולים
 // (settings/treatments). בחירה מההצעות — או הקלדת שם זהה בדיוק לטיפול —
@@ -72,15 +78,15 @@ export default function IncomeForm() {
   const { id } = useParams();
   const isEdit = !!id;
   const navigate = useNavigate();
-  const { items } = useCollectionData("income");
+  const { items, loading } = useCollectionData("income");
   const repo = useRepo("income");
   const log = useAuditLog();
-  const { data: pmDoc } = useSettingDoc("paymentMethods");
-  const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+  const { items: methods } = usePaymentMethods();
   const { data: treatmentsDoc } = useSettingDoc("treatments");
   const treatments = treatmentsDoc?.items ?? [];
   const { years } = useVatSettings();
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const editing = isEdit ? items.find((r) => r.id === id) : null;
   // הכנסה שנוצרה אוטומטית (מתור / רכישת סדרה / מכירת מוצר) — הלקוחה והשיוך
@@ -103,6 +109,7 @@ export default function IncomeForm() {
   // שיעור מע"מ ידני (מחרוזת). null = ברירת המחדל לפי שנת המס של התאריך —
   // נגזר בזמן רינדור, כך שמשתנה עם התאריך ועם טעינת ההגדרות.
   const [rateInput, setRateInput] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (editing) {
@@ -110,10 +117,9 @@ export default function IncomeForm() {
         ...form,
         ...editing,
         amount: editing.amount ?? "",
-        // "פירוט / טיפול" הוא כעת שדה העריכה היחיד לשם המוצג (treatmentName).
-        // הכנסות שנוצרו אוטומטית (מתור/מכירה) נשמרות עם treatmentName אך בלי
-        // note — לכן טוענים מ-note אם קיים, ואם לא, מ-treatmentName הקיים,
-        // כדי שהשדה בפועל יציג את הערך הנוכחי ולא יופיע ריק.
+        // "פירוט / טיפול" הוא שדה העריכה היחיד לשם המוצג (treatmentName).
+        // הכנסות אוטומטיות נשמרות עם treatmentName אך בלי note — לכן טוענים
+        // מ-note אם קיים, ואם לא, מ-treatmentName.
         note: editing.note || editing.treatmentName || "",
         clientId: editing.clientId || "",
         clientName: editing.clientName || "",
@@ -127,6 +133,24 @@ export default function IncomeForm() {
     setForm((f) => ({ ...f, ...patch }));
   }
 
+  // מצבי טעינה / לא נמצא (בעריכה) — כמו ב-AppointmentForm. חייבים לבוא אחרי
+  // כל ה-hooks.
+  if (isEdit && loading) return <p className="muted">טוען…</p>;
+  if (isEdit && !editing)
+    return (
+      <>
+        <ScreenHeader
+          title="עריכת הכנסה"
+          action={
+            <button className="btn btn--ghost" onClick={() => goBackOr(navigate, FALLBACK)}>
+              חזרה
+            </button>
+          }
+        />
+        <div className="empty-state">ההכנסה לא נמצאה.</div>
+      </>
+    );
+
   const defaultRate = effectiveRate(taxYearFor(form.date, years));
   const manualRate = rateInput != null;
   const shownRate = manualRate ? rateInput : String(defaultRate);
@@ -137,7 +161,11 @@ export default function IncomeForm() {
     !!invTrim &&
     items.some((r) => r.id !== id && String(r.invoiceNumber || "").trim() === invTrim);
 
+  // סכום ריק חוסם שמירה; סכום 0 מותר (למשל הכנסת ₪0 שנוצרה מקיזוז יתרה).
+  const amountEmpty = form.amount === "" || form.amount == null;
+
   async function save() {
+    if (saving) return;
     // הכנסה שנוצרה אוטומטית: שינוי סכום לא מעדכן את התור/החבילה/המלאי/היתרה
     // שמאחוריה — מבקשים אישור מפורש לפני שמירה.
     if (isEdit && editing && !isManual && Number(form.amount) !== Number(editing.amount)) {
@@ -155,9 +183,7 @@ export default function IncomeForm() {
       ? treatments.find((t) => t.name === form.note.trim()) || null
       : null;
     const payload = {
-      // תוקן QA (2026-09): הקלדה בטעות של סימן שלילי (נפוץ במיוחד במקלדת
-      // מספרים במובייל) הייתה נשמרת כמות שהיא ומעוותת את סיכומי ההכנסות/
-      // הרווח וייצוא ה-Excel, בלי שום אינדיקציה לטעות. הסכום נעצר עתה ב-0.
+      // סכום שלילי (הקלדה בטעות) נעצר ב-0.
       amount: Math.max(0, Number(form.amount) || 0),
       date: form.date,
       invoiceNumber: form.invoiceNumber.trim(),
@@ -168,43 +194,62 @@ export default function IncomeForm() {
       // בלקוחה מזדמנת (שם בלבד, בלי כרטיסייה).
       clientId: form.clientId || null,
       clientName: form.clientName.trim(),
-      // תוקן: לפני כן, כאשר עורכים הכנסה שכבר יש לה treatmentName (כל הכנסה
-      // אוטומטית), הביטוי היה editing?.treatmentName || form.note.trim() —
-      // שמתעלם תמיד מהעריכה בפועל (כי editing.treatmentName תמיד "אמיתי").
-      // כעת שדה "פירוט / טיפול" הוא מקור האמת היחיד, תמיד ניתן לעריכה.
+      // שדה "פירוט / טיפול" הוא מקור האמת היחיד, תמיד ניתן לעריכה.
       treatmentName: form.note.trim(),
       // treatmentId נשמר רק להכנסה ידנית, וכשהשם תואם טיפול מהרשימה.
       ...(isManual ? { treatmentId: linkedTreatment?.id || null } : {}),
       source: editing?.source || "manual",
-      // מע"מ: נשמר רק שיעור שנערך ידנית; אחרת null והשיעור נגזר משנת המס
-      // (ראו utils/vat.js). הנטו והמע"מ אינם נשמרים.
+      // מע"מ: נשמר רק שיעור שנערך ידנית; אחרת null והשיעור נגזר משנת המס.
       vatRate: manualRate ? clampRate(rateInput) : null,
       receiptData: form.receiptData || null,
       receiptFileId: form.receiptFileId || null,
       receiptMime: form.receiptMime || null,
     };
-    if (isEdit) {
-      await repo.update(id, payload);
-      await log({
-        action: "income_edit",
-        entity: { type: "income", id, desc: `${payload.treatmentName || "הכנסה"} · ${formatILS(payload.amount)}` },
-        before: {
-          amount: editing.amount,
-          paid: editing.paid,
-          invoiceNumber: editing.invoiceNumber,
-          vatRate: editing.vatRate ?? null,
-        },
-        after: {
-          amount: payload.amount,
-          paid: payload.paid,
-          invoiceNumber: payload.invoiceNumber,
-          vatRate: payload.vatRate,
-        },
+
+    setSaving(true);
+    try {
+      if (isEdit) await repo.update(id, payload);
+      else await repo.add(payload);
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת ההכנסה נכשלה: " + (e?.message || e),
+        alertOnly: true,
       });
-    } else {
-      await repo.add(payload);
+      return;
     }
-    navigate("/business");
+
+    // כשל בלוג אחרי פעולה שהצליחה לא אמור להציג "השמירה נכשלה".
+    if (isEdit) {
+      try {
+        await log({
+          action: "income_edit",
+          entity: {
+            type: "income",
+            id,
+            desc: `${payload.treatmentName || "הכנסה"} · ${formatILS(payload.amount)}`,
+          },
+          before: {
+            amount: editing.amount,
+            paid: editing.paid,
+            invoiceNumber: editing.invoiceNumber,
+            vatRate: editing.vatRate ?? null,
+          },
+          after: {
+            amount: payload.amount,
+            paid: payload.paid,
+            invoiceNumber: payload.invoiceNumber,
+            vatRate: payload.vatRate,
+          },
+        });
+      } catch (e) {
+        console.error("[audit] income_edit failed", e);
+      }
+    }
+    toast.showMessage(isEdit ? "ההכנסה עודכנה ✓" : "ההכנסה נוספה ✓");
+    // חזרה למסך שממנו הגענו (כרטיסיית לקוחה, חיפוש, רשימת הכנסות, דשבורד...).
+    goBackOr(navigate, FALLBACK);
   }
 
   return (
@@ -212,7 +257,7 @@ export default function IncomeForm() {
       <ScreenHeader
         title={isEdit ? "עריכת הכנסה" : "הכנסה ידנית"}
         action={
-          <button className="btn btn--ghost" onClick={() => navigate("/business")}>
+          <button className="btn btn--ghost" onClick={() => goBackOr(navigate, FALLBACK)}>
             חזרה
           </button>
         }
@@ -315,8 +360,8 @@ export default function IncomeForm() {
       </div>
 
       <div className="save-row">
-        <button className="btn" disabled={!form.amount} onClick={save}>
-          {isEdit ? "אישור שמירה" : "הוספת הכנסה"}
+        <button className="btn" disabled={amountEmpty || saving} onClick={save}>
+          {saving ? "שומרת…" : isEdit ? "אישור שמירה" : "הוספת הכנסה"}
         </button>
       </div>
     </>

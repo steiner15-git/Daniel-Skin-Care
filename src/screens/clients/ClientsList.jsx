@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import { SkeletonRows } from "../../components/Skeleton";
@@ -8,9 +8,13 @@ import { useReferralRewardApproval } from "../../data/useReferralReward";
 import { inactiveClients, referralRewards } from "../../utils/reminders";
 import { fullName, normalizePhone } from "./clientUtils";
 
+// השהיה לפני כתיבת מונח החיפוש ל-URL: כתיבה בכל הקשה גורמת לעומס על
+// history.replaceState (Safari חוסם קריאות תכופות מדי).
+const URL_SYNC_DELAY_MS = 300;
+
 export default function ClientsList() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const filterParam = searchParams.get("filter");
   const inactiveFilter = filterParam === "inactive";
   const referralFilter = filterParam === "referral";
@@ -23,7 +27,40 @@ export default function ClientsList() {
   const { items: appts, loading: loadingAppts } = useCollectionData("appointments");
   const { data: reminders } = useReminderSettings();
   const approveReward = useReferralRewardApproval();
-  const [q, setQ] = useState("");
+
+  // מונח החיפוש: state מקומי (כדי שההקלדה תישאר חלקה), שמסונכרן ל-?q= ב-URL
+  // (replace, עם השהיה). כשחוזרים לרשימה אחרי כניסה לכרטיסיית לקוחה — החיפוש
+  // משוחזר מה-URL, וה-ScrollReset משחזר את הגלילה.
+  const [q, setQ] = useState(() => searchParams.get("q") || "");
+
+  useEffect(() => {
+    if ((searchParams.get("q") || "") === q) return;
+    const t = setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (q) next.set("q", q);
+          else next.delete("q");
+          return next;
+        },
+        { replace: true }
+      );
+    }, URL_SYNC_DELAY_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  // ניקוי סינון ה"לא פעילות"/"תגמול הפניות" בלבד — החיפוש הנוכחי נשמר.
+  function clearFilter() {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("filter");
+        return next;
+      },
+      { replace: true }
+    );
+  }
 
   const active = useMemo(() => items.filter((c) => !c.archived), [items]);
   const archivedCount = items.length - active.length;
@@ -75,7 +112,7 @@ export default function ClientsList() {
           style={{ marginTop: 0, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}
         >
           <span>מציגה לקוחות שלא ביקרו מעל {reminders.inactiveClientMonths} חודשים</span>
-          <button className="btn btn--ghost btn--sm" onClick={() => navigate("/clients")}>
+          <button className="btn btn--ghost btn--sm" onClick={clearFilter}>
             נקה סינון
           </button>
         </div>
@@ -90,7 +127,7 @@ export default function ClientsList() {
             מציגה לקוחות זכאיות לתגמול הפניות (כל {reminders.referralRewardThreshold} הפניות
             שהושלמו)
           </span>
-          <button className="btn btn--ghost btn--sm" onClick={() => navigate("/clients")}>
+          <button className="btn btn--ghost btn--sm" onClick={clearFilter}>
             נקה סינון
           </button>
         </div>

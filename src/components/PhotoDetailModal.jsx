@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useImageSrc } from "../data/useImageSrc";
+import { useConfirm } from "../context/ConfirmDialogProvider";
 import ImageModal from "./ImageModal";
 
 // מודל פרטי תמונה משותף לאלבום הלקוחה ולאלבום הכללי:
@@ -16,11 +17,13 @@ export default function PhotoDetailModal({
 }) {
   const editableClient = Array.isArray(clients);
   const src = useImageSrc(photo.localData, photo.driveFileId, true);
+  const confirmDialog = useConfirm();
   const canShare = typeof navigator !== "undefined" && !!navigator.share;
   const [clientId, setClientId] = useState(photo.clientId || "");
   const [date, setDate] = useState(photo.date || "");
   const [treatmentName, setTreatmentName] = useState(photo.treatmentName || "");
   const [description, setDescription] = useState(photo.description || "");
+  const [saving, setSaving] = useState(false);
   const dirty =
     (editableClient && clientId !== (photo.clientId || "")) ||
     date !== (photo.date || "") ||
@@ -42,6 +45,27 @@ export default function PhotoDetailModal({
     } catch {
       /* המשתמשת ביטלה את השיתוף או שאינו נתמך */
     }
+  }
+
+  // כשל שמירה (רשת/Firestore) מוצג כהודעה והחלון נשאר פתוח עם מה שהוקלד —
+  // קודם הכשל היה נבלע והחלון נסגר כאילו השמירה הצליחה.
+  async function handleSave() {
+    if (saving) return;
+    const patch = { date, treatmentName, description };
+    if (editableClient) patch.clientId = clientId;
+    setSaving(true);
+    try {
+      await onSave(photo.id, patch);
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת פרטי התמונה נכשלה: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
+    onClose();
   }
 
   return (
@@ -96,17 +120,8 @@ export default function PhotoDetailModal({
             </button>
           )}
         </div>
-        <button
-          className="btn"
-          disabled={!dirty}
-          onClick={async () => {
-            const patch = { date, treatmentName, description };
-            if (editableClient) patch.clientId = clientId;
-            await onSave(photo.id, patch);
-            onClose();
-          }}
-        >
-          שמירה
+        <button className="btn" disabled={!dirty || saving} onClick={handleSave}>
+          {saving ? "שומרת…" : "שמירה"}
         </button>
       </div>
     </ImageModal>

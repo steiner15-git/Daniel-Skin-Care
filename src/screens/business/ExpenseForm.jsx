@@ -3,23 +3,32 @@ import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import VatFields from "../../components/VatFields";
 import DateField from "../../components/DateField";
-import { useCollectionData, useRepo, useSettingDoc, useAuditLog } from "../../data";
+import { useCollectionData, useRepo, useAuditLog } from "../../data";
+import { useExpenseCategories } from "../../data/useListSettings";
 import { useVatSettings } from "../../data/useVatSettings";
+import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import { formatILS } from "../../utils/money";
 import { dateInputValue } from "../../utils/datetime";
 import { taxYearFor, effectiveRate, clampRate, expenseVat } from "../../utils/vat";
 import { endDateForCount } from "../../utils/recurring";
+import { goBackOr } from "../../utils/nav";
 import ReceiptField from "../../components/ReceiptField";
+
+// מסך ברירת מחדל כשאין מסך קודם באפליקציה (כניסה ישירה): לשונית ההוצאות.
+const FALLBACK = "/business?tab=expense";
 
 export default function ExpenseForm() {
   const { id } = useParams();
   const isEdit = !!id;
   const navigate = useNavigate();
-  const { items } = useCollectionData("expenses");
+  const { items, loading } = useCollectionData("expenses");
   const repo = useRepo("expenses");
   const log = useAuditLog();
-  const { data: catDoc } = useSettingDoc("expenseCategories");
-  const categories = catDoc?.items ?? [];
+  const confirmDialog = useConfirm();
+  const toast = useToast();
+  // קטגוריות כולל ברירות מחדל גם אם הרשימה לא נשמרה מעולם בהגדרות.
+  const { items: categories } = useExpenseCategories();
   const { years } = useVatSettings();
 
   const editing = isEdit ? items.find((r) => r.id === id) : null;
@@ -43,12 +52,13 @@ export default function ExpenseForm() {
   const [endMode, setEndMode] = useState("none");
   const [endCount, setEndCount] = useState("12");
   const [endDate, setEndDate] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (editing) {
       setForm({ ...form, ...editing, total: editing.total ?? "" });
-      // הוצאה עם שיעור ידני, או הוצאה ישנה (amountBeforeVat+vat מחשבונית ספק —
-      // expenseVat מחזירה עבורה שיעור נגזר): נטענת כשיעור ידני.
+      // הוצאה עם שיעור ידני, או הוצאה ישנה (amountBeforeVat+vat מחשבונית ספק):
+      // נטענת כשיעור ידני.
       const p = expenseVat(editing, years);
       setRateInput(p.manual ? String(p.rate) : null);
       if (editing.recurringEnd) {
@@ -62,6 +72,23 @@ export default function ExpenseForm() {
   function set(patch) {
     setForm((f) => ({ ...f, ...patch }));
   }
+
+  // מצבי טעינה / לא נמצא (בעריכה) — חייבים לבוא אחרי כל ה-hooks.
+  if (isEdit && loading) return <p className="muted">טוען…</p>;
+  if (isEdit && !editing)
+    return (
+      <>
+        <ScreenHeader
+          title="עריכת הוצאה"
+          action={
+            <button className="btn btn--ghost" onClick={() => goBackOr(navigate, FALLBACK)}>
+              חזרה
+            </button>
+          }
+        />
+        <div className="empty-state">ההוצאה לא נמצאה.</div>
+      </>
+    );
 
   const defaultRate = effectiveRate(taxYearFor(form.date, years));
   const manualRate = rateInput != null;
@@ -84,6 +111,7 @@ export default function ExpenseForm() {
       (endMode === "date" && (!endDate || endDate < form.date)));
 
   async function save() {
+    if (saving) return;
     // תאריך החיוב האחרון של הוצאה קבועה (null = ללא סיום).
     const recurringEnd = !form.recurring
       ? null
@@ -97,12 +125,10 @@ export default function ExpenseForm() {
       description: form.description.trim(),
       businessName: form.businessName.trim(),
       invoiceNumber: form.invoiceNumber.trim(),
-      // תוקן QA (2026-09): סכום שלילי (הקלדה בטעות) נעצר ב-0 — לא אמור לעוות
-      // את סיכום ההוצאות, "רווח" בטאב הסיכום, וייצוא ה-Excel השנתי.
+      // סכום שלילי (הקלדה בטעות) נעצר ב-0.
       total: Math.max(0, Number(form.total) || 0),
-      // מע"מ: נשמר רק שיעור שנערך ידנית; אחרת null והשיעור נגזר משנת המס
-      // (ראו utils/vat.js). שדות amountBeforeVat/vat הישנים מנוקים — הנטו
-      // והמע"מ נגזרים מהסכום הכולל והשיעור ולא נשמרים.
+      // מע"מ: נשמר רק שיעור שנערך ידנית; אחרת null והשיעור נגזר משנת המס.
+      // שדות amountBeforeVat/vat הישנים מנוקים.
       vatRate: manualRate ? clampRate(rateInput) : null,
       amountBeforeVat: null,
       vat: null,
@@ -113,18 +139,41 @@ export default function ExpenseForm() {
       receiptFileId: form.receiptFileId || null,
       receiptMime: form.receiptMime || null,
     };
-    if (isEdit) {
-      await repo.update(id, payload);
-      await log({
-        action: "expense_edit",
-        entity: { type: "expense", id, desc: `${payload.description || "הוצאה"} · ${formatILS(payload.total)}` },
-        before: { total: editing.total, vatRate: expenseVat(editing, years).rate },
-        after: { total: payload.total, vatRate: payload.vatRate },
+
+    setSaving(true);
+    try {
+      if (isEdit) await repo.update(id, payload);
+      else await repo.add(payload);
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "שמירת ההוצאה נכשלה: " + (e?.message || e),
+        alertOnly: true,
       });
-    } else {
-      await repo.add(payload);
+      return;
     }
-    navigate("/business");
+
+    // כשל בלוג אחרי פעולה שהצליחה לא אמור להציג "השמירה נכשלה".
+    if (isEdit) {
+      try {
+        await log({
+          action: "expense_edit",
+          entity: {
+            type: "expense",
+            id,
+            desc: `${payload.description || "הוצאה"} · ${formatILS(payload.total)}`,
+          },
+          before: { total: editing.total, vatRate: expenseVat(editing, years).rate },
+          after: { total: payload.total, vatRate: payload.vatRate },
+        });
+      } catch (e) {
+        console.error("[audit] expense_edit failed", e);
+      }
+    }
+    toast.showMessage(isEdit ? "ההוצאה עודכנה ✓" : "ההוצאה נוספה ✓");
+    // חזרה למסך שממנו הגענו (חיפוש, רשימת הוצאות, דשבורד...).
+    goBackOr(navigate, FALLBACK);
   }
 
   return (
@@ -132,7 +181,7 @@ export default function ExpenseForm() {
       <ScreenHeader
         title={isEdit ? "עריכת הוצאה" : "הוצאה חדשה"}
         action={
-          <button className="btn btn--ghost" onClick={() => navigate("/business")}>
+          <button className="btn btn--ghost" onClick={() => goBackOr(navigate, FALLBACK)}>
             חזרה
           </button>
         }
@@ -245,8 +294,8 @@ export default function ExpenseForm() {
       </div>
 
       <div className="save-row">
-        <button className="btn" disabled={!Number(form.total) || endInvalid} onClick={save}>
-          {isEdit ? "אישור שמירה" : "הוספת הוצאה"}
+        <button className="btn" disabled={!Number(form.total) || endInvalid || saving} onClick={save}>
+          {saving ? "שומרת…" : isEdit ? "אישור שמירה" : "הוספת הוצאה"}
         </button>
       </div>
     </>

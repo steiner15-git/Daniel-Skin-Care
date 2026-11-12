@@ -155,7 +155,7 @@ export default function Treatments() {
             <div key={t.id} className="card list-item">
               <div className="list-item__main">
                 <strong>{t.name}</strong>
-                <span className="muted">
+                <span className="sensitive">
                   {t.durationMin} דק' · ₪{t.price}
                 </span>
               </div>
