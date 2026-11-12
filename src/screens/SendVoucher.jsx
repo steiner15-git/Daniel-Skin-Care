@@ -30,7 +30,7 @@ export default function SendVoucher() {
   const credit = credits.find((c) => c.id === creditId);
 
   function goBack() {
-    navigate("/vouchers");
+    navigate("/vouchers?tab=purchases");
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -105,11 +105,11 @@ export default function SendVoucher() {
           <span>{tokens["תוקף"]}</span>
         </div>
         <div className="read-row">
-          <span className="muted">אימייל</span>
+          <span className="sensitive">אימייל</span>
           <span dir="ltr">{email || "— חסר —"}</span>
         </div>
         <div className="read-row">
-          <span className="muted">טלפון</span>
+          <span className="sensitive">טלפון</span>
           <span dir="ltr">{phone || "— חסר —"}</span>
         </div>
       </div>

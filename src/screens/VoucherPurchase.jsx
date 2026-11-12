@@ -3,12 +3,14 @@ import { useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../components/ScreenHeader";
 import ClientPicker from "../components/ClientPicker";
 import DateField from "../components/DateField";
-import { useCollectionData, useBatchRepo, useSettingDoc, useAuditLog } from "../data";
+import { useCollectionData, useBatchRepo, useAuditLog } from "../data";
 import { useConfirm } from "../context/ConfirmDialogProvider";
+import { useToast } from "../context/ToastProvider";
 import { fullName } from "./clients/clientUtils";
 import { formatILS } from "../utils/money";
 import { dateInputValue } from "../utils/datetime";
 import { round2 } from "../utils/credits";
+import { usePaymentMethods } from "../data/useListSettings";
 
 // רכישת שובר מתנה (addendum שוברים/זיכוי, P-1..P-10). נתיבים:
 //   /vouchers/:id/purchase — מהגדרת שובר (סכום ותוקף ברירת מחדל מההגדרה)
@@ -23,10 +25,10 @@ export default function VoucherPurchase() {
 
   const { items: vouchers, loading } = useCollectionData("vouchers");
   const batchRepo = useBatchRepo();
-  const { data: pmDoc } = useSettingDoc("paymentMethods");
-  const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+  const { items: methods } = usePaymentMethods();
   const log = useAuditLog();
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const v = id ? vouchers.find((x) => x.id === id) : null;
   const thisYear = new Date().getFullYear();
@@ -150,6 +152,7 @@ export default function VoucherPurchase() {
       });
 
       await batchRepo.commit(ops);
+      toast.showMessage("השובר נרכש ✓");
 
       // לוג אחרי שה-commit הצליח — כשל בלוג לא אמור להציג "הרכישה נכשלה".
       try {

@@ -1,4 +1,5 @@
 import NameListEditor from "./NameListEditor";
+import { DEFAULT_PAYMENT_METHODS } from "../../data/useListSettings";
 
 export default function PaymentMethods() {
   return (
@@ -7,7 +8,7 @@ export default function PaymentMethods() {
       title="אמצעי תשלום"
       itemLabel="שם אמצעי התשלום"
       addLabel="הוספת אמצעי תשלום"
-      defaults={["מזומן", "אשראי", "ביט", "אחר"]}
+      defaults={DEFAULT_PAYMENT_METHODS}
     />
   );
 }

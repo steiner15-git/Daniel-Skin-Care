@@ -3,9 +3,11 @@ import { useNavigate, useParams, useLocation } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import CreditOffsetField from "../../components/CreditOffsetField";
 import { useCollectionData, useRepo, useBatchRepo, useSettingDoc, useAuditLog } from "../../data";
+import { usePaymentMethods } from "../../data/useListSettings";
 import { formatDateTime, dateInputValue } from "../../utils/datetime";
 import { formatILS } from "../../utils/money";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 import { CANCEL_REASONS, CANCEL_REASON_LABELS } from "../../utils/cancellations";
 import {
   creditBalance,
@@ -22,27 +24,32 @@ export default function CloseAppointment() {
   // לאן חוזרים אחרי אישור/ביטול/חזרה: מסך הבית (from "dashboard"), תצוגת
   // "ממתינים" ביומן (from "pending" — כדי לסגור כמה תורים ברצף), או לוח השנה.
   const from = location.state?.from;
+  // returnTo (מהיומן או מכרטיסיית לקוחה) גובר: חוזרים בדיוק למסך ולמצב שממנו הגענו.
   const backTo =
-    from === "dashboard" ? "/" : from === "pending" ? "/calendar?view=pending" : "/calendar";
+    location.state?.returnTo ||
+    (from === "dashboard" ? "/" : from === "pending" ? "/calendar?view=pending" : "/calendar");
   const { items: appts, loading } = useCollectionData("appointments");
   const { items: packages } = useCollectionData("clientPackages");
   // יתרות זיכוי (שוברי מתנה + זיכוי לקוחה) — לקיזוז במסלול ההכנסה הרגיל בלבד.
   const { items: credits } = useCollectionData("credits");
-  // apptRepo נשאר בשימוש רק לביטול תור (כתיבה בודדת, לא זקוקה ל-batch).
-  // שני מסלולי הסגירה עצמם (חיוב מחבילה / הכנסה רגילה) עברו ל-useBatchRepo
-  // (Phase 4 §2) — ראו הערה מפורטת ליד confirmFromPackage/confirmDone למטה.
   const apptRepo = useRepo("appointments");
   const batchRepo = useBatchRepo();
-  const { data: pmDoc } = useSettingDoc("paymentMethods");
-  const methods = pmDoc?.items ?? [{ id: "cash", name: "מזומן" }];
+  // רשימת אמצעי התשלום כוללת את ברירות המחדל גם אם לא נשמרה מעולם בהגדרות.
+  const { items: methods } = usePaymentMethods();
+  // מחירי הטיפולים — fallback למחיר כשהתור נשמר עם מחיר 0 (חיוב מחבילה שפקעה).
+  const { data: treatmentsDoc } = useSettingDoc("treatments");
+  const treatments = treatmentsDoc?.items ?? [];
   const log = useAuditLog();
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const appt = appts.find((a) => a.id === id);
   const [amount, setAmount] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("");
   const [date, setDate] = useState(dateInputValue(new Date()));
   const [paid, setPaid] = useState(false);
+  // saving נשאר true אחרי הצלחה (עד הניווט) — כך שהמסך לא מבהב "התור כבר נסגר"
+  // ברגע שהנתונים מתעדכנים לפני שהניווט מסתיים.
   const [saving, setSaving] = useState(false);
   // קיזוז מיתרה: null = ברירת מחדל (הנמוך מבין היתרה לסכום); מחרוזת = הוקלד.
   const [offset, setOffset] = useState(null);
@@ -56,11 +63,39 @@ export default function CloseAppointment() {
       </>
     );
 
-  const amountVal = amount == null ? appt.price ?? 0 : amount;
+  // מגן: תור שכבר נסגר/בוטל (כניסה חוזרת, קישור ישן, או סגירה בטאב אחר) לא
+  // יכול להיסגר שוב — אחרת נוצרת הכנסה כפולה.
+  if ((appt.status === "done" || appt.status === "cancelled") && !saving) {
+    return (
+      <>
+        <ScreenHeader
+          title="אישור ביצוע"
+          action={
+            <button className="btn btn--ghost" onClick={() => navigate(backTo)}>
+              חזרה
+            </button>
+          }
+        />
+        <div className="notice" style={{ marginTop: 0 }}>
+          {appt.status === "done"
+            ? "התור כבר נסגר (אושר ביצוע). שינויים בתשלום נעשים דרך עריכת ההכנסה."
+            : "התור בוטל."}
+        </div>
+      </>
+    );
+  }
+
+  // תור שנשמר עם מחיר 0 בגלל כוונת חיוב מחבילה (וכעת החבילה לא כשירה) —
+  // ברירת המחדל לסכום היא מחיר הטיפול מההגדרות.
+  const fallbackPrice =
+    appt.clientPackageId && !(Number(appt.price) > 0)
+      ? treatments.find((t) => t.id === appt.treatmentId)?.price
+      : undefined;
+  const amountVal = amount == null ? fallbackPrice ?? appt.price ?? 0 : amount;
   const amountNum = Math.max(0, Number(amountVal) || 0);
 
   // קיזוז מיתרת זיכוי (O-1..O-6): רק ללקוחה עם clientId (מזדמנת — אין קיזוז).
-  // ההכנסה נרשמת רק על החלק ששולם בפועל; כיסוי מלא = ללא הכנסה וללא חובת
+  // ההכנסה נרשמת רק על החלק ששולם בפועל; כיסוי מלא = הכנסה בסכום 0 וללא חובת
   // אמצעי תשלום.
   const balance = appt.clientId ? creditBalance(credits, appt.clientId) : 0;
   const offsetVal = resolveOffset(offset, balance, amountNum);
@@ -68,11 +103,7 @@ export default function CloseAppointment() {
   const fullyCovered = offsetVal > 0 && cashAmount <= 0;
 
   const pkg = appt.clientPackageId ? packages.find((p) => p.id === appt.clientPackageId) : null;
-  // תוקן QA (2026-09): הבחנה בין "החבילה נמחקה" (pkg === undefined, למרות
-  // ש-clientPackageId עדיין מוגדר על התור) לבין "נמצאה אך לא כשירה" (פקעה/
-  // נוצלה). לפני התיקון שתי האפשרויות הוצגו תחת אותה הודעה ("פקעה או שנגמרו
-  // בה המפגשים") — מטעה כאשר החבילה בפועל נמחקה (למשל דרך "מחיקת חבילה" ב-
-  // כרטיסיית הלקוחה) ולא פקעה כלל.
+  // הבחנה בין "החבילה נמחקה" לבין "נמצאה אך לא כשירה" (פקעה/נוצלה).
   const t0 = new Date();
   t0.setHours(0, 0, 0, 0);
   const pkgChargeable =
@@ -82,12 +113,7 @@ export default function CloseAppointment() {
     (!pkg.expiryDate || new Date(pkg.expiryDate) >= t0);
   const pkgWasDeleted = !!appt.clientPackageId && !pkg;
 
-  // Phase 4 §2 — אטומיות: לפני התיקון, ניכוי המפגש מהחבילה (clientPackages)
-  // וסימון התור כ-"done" היו שתי כתיבות repo נפרדות. כשל רשת בין השתיים
-  // היה יכול להשאיר חבילה עם מפגש מנוכה אך תור שלא סומן כסגור (או להפך),
-  // ללא דרך לזהות/לתקן זאת אוטומטית. writeBatch מבטיח ששתי הכתיבות
-  // מצליחות יחד או נכשלות יחד — אותו דפוס בדיוק כמו ב-SeriesPurchase.jsx
-  // ו-ProductSell.jsx (ראו הערת התיעוד ב-data/firestore.js).
+  // Phase 4 §2 — אטומיות: ניכוי המפגש מהחבילה וסימון התור כ-"done" ב-batch אחד.
   // מסלול החיבור מחבילה אינו משתנה בתוספת הקיזוז (O-11).
   async function confirmFromPackage() {
     setSaving(true);
@@ -114,12 +140,6 @@ export default function CloseAppointment() {
           },
         },
       ]);
-      await log({
-        action: "package_charge",
-        entity: { type: "clientPackage", id: pkg.id, desc: `${appt.clientName} — ${pkg.seriesName}` },
-        before: { remainingSessions: pkg.remainingSessions },
-        after: { remainingSessions: remaining },
-      });
     } catch (e) {
       setSaving(false);
       await confirmDialog({
@@ -129,18 +149,23 @@ export default function CloseAppointment() {
       });
       return;
     }
+    // כשל בלוג אחרי שהפעולה הצליחה לא אמור להציג "האישור נכשל".
+    try {
+      await log({
+        action: "package_charge",
+        entity: { type: "clientPackage", id: pkg.id, desc: `${appt.clientName} — ${pkg.seriesName}` },
+        before: { remainingSessions: pkg.remainingSessions },
+        after: { remainingSessions: remaining },
+      });
+    } catch (e) {
+      console.error("[audit] package_charge failed", e);
+    }
+    toast.showMessage("התור נסגר ✓ מפגש אחד נוכה מהחבילה");
     navigate(backTo);
   }
 
-  // Phase 4 §2 — אטומיות: לפני התיקון, יצירת רשומת ה-income וסימון התור
-  // כ-"done" היו שתי כתיבות repo נפרדות (incomeRepo.add ואז apptRepo.update).
-  // כשל רשת בין השתיים היה יכול ליצור הכנסה "יתומה" בלי תור מעודכן, או
-  // תור שנשאר "ממתין לסגירה" בעוד שהכנסה כבר נוצרה. עברו יחד ל-writeBatch
-  // דרך useBatchRepo — מזהה ההכנסה נוצר מראש עם batchRepo.newId() כדי
-  // שאפשר יהיה לכתוב אותו כ-incomeId על רשומת התור באותו batch.
-  //
-  // קיזוז מיתרה (O-7): ירידת remaining ביתרות שנוצלו, יצירת ההכנסה (על החלק
-  // ששולם בפועל; בכיסוי מלא — הכנסה בסכום 0) ועדכון התור — הכול ב-commit אחד. כשל: הודעת שגיאה ו-saving משתחרר, והיתרה לא ירדה.
+  // Phase 4 §2 — אטומיות: יצירת ההכנסה, ירידת היתרות וסימון התור כ-"done"
+  // ב-commit אחד (O-7). כשל: הודעת שגיאה ו-saving משתחרר, והיתרה לא ירדה.
   async function confirmDone() {
     setSaving(true);
     const allocations = offsetVal > 0 ? allocateCredit(credits, appt.clientId, offsetVal) : [];
@@ -162,25 +187,18 @@ export default function CloseAppointment() {
         data: {
           source: "appointment",
           appointmentId: appt.id,
-          // clientId נשמר כאן (בנוסף ל-clientName) — אותו דפוס כמו בהכנסות
-          // ממכירת מוצר/רכישת סדרה. בלעדיו אותה לקוחה מופיעה ב"סיכום לפי
-          // לקוחה" בשתי שורות (מפתח clientId מול מפתח name:...). לקוחה
-          // שהוזנה ידנית בתיאום תור (ללא כרטיסייה) — clientId ריק.
-          // הכנסות שנוצרו *לפני* תיקון זה ימשיכו לא לכלול clientId.
+          // clientId נשמר בנוסף ל-clientName; לקוחה מזדמנת — clientId ריק.
           clientId: appt.clientId || null,
           clientName: appt.clientName || "",
           treatmentName: appt.treatmentName || "",
-          // סכום ששולם בפועל (אחרי קיזוז מיתרה). תוקן QA (2026-09): סכום
-          // שלילי (הקלדה בטעות) נעצר ב-0 (resolveOffset/amountNum).
+          // סכום ששולם בפועל (אחרי קיזוז מיתרה), נעצר ב-0.
           amount: cashAmount,
           date,
           invoiceNumber: "",
           paymentMethod: fullyCovered ? "" : paymentMethod,
-          // בכיסוי מלא ההכנסה בסכום 0 מסומנת "שולם" (לא נספרת כתשלום שטרם אומת).
-          // אחרת — אישור התשלום נעשה ידנית ע"י המפעילה, לא אוטומטית.
+          // בכיסוי מלא ההכנסה בסכום 0 מסומנת "שולם"; אחרת האישור ידני.
           paid: fullyCovered ? true : paid,
-          // creditApplications: פירוט לאילו יתרות נוצל הקיזוז — נדרש להחזרת
-          // היתרה במחיקת ההכנסה (Business.jsx).
+          // creditApplications: נדרש להחזרת היתרה במחיקת ההכנסה (Business.jsx).
           ...(offsetVal > 0
             ? {
                 creditApplied: offsetVal,
@@ -203,12 +221,13 @@ export default function CloseAppointment() {
           // החבילה פקעה/נגמרה/נמחקה — התור חויב רגיל, מנתקים את הקישור לחבילה
           clientPackageId: null,
           chargedFromPackage: false,
-          // true רק כשהקיזוז כיסה את כל הסכום (ההכנסה בסכום 0) — רשת ביטחון ל-D-1/D-2
+          // true רק כשהקיזוז כיסה את כל הסכום — רשת ביטחון ל-D-1/D-2
           chargedFromCredit: fullyCovered,
           ...(offsetVal > 0 ? { creditApplied: offsetVal } : {}),
         },
       });
       await batchRepo.commit(ops);
+      toast.showMessage("התור נסגר ✓ ההכנסה נרשמה");
     } catch (e) {
       setSaving(false);
       await confirmDialog({
@@ -219,8 +238,7 @@ export default function CloseAppointment() {
       return;
     }
 
-    // לוג קיזוז (O-10) — אחרי שה-commit הצליח. כשל בלוג לא אמור להציג
-    // "הביצוע נכשל" כשהתור כבר נסגר בפועל, ולכן נבלע (נרשם ל-console).
+    // לוג קיזוז (O-10) — אחרי שה-commit הצליח; כשל בלוג נבלע.
     for (const { credit, remainingAfter } of allocations) {
       try {
         await log({
@@ -240,10 +258,8 @@ export default function CloseAppointment() {
     navigate(backTo);
   }
 
-  // Phase 4 §5 — מעקב ביטולים: הדיאלוג דורש בחירת סיבה (reasonOptions),
-  // הערך שנבחר נשמר על התור כ-cancelReason, ונרשם בלוג השינויים — כולל
-  // התווית הקריאה של הסיבה (לא רק הערך הגולמי) בתוך entity.desc עצמו, כדי
-  // שהיא תופיע ישירות בשורת הלוג ולא רק בתוך "אחרי: {...}".
+  // Phase 4 §5 — מעקב ביטולים: הדיאלוג דורש בחירת סיבה, נשמר cancelReason,
+  // והתווית הקריאה נכללת ב-entity.desc של הלוג.
   async function cancelAppt() {
     const reason = await confirmDialog({
       title: "ביטול תור",
@@ -253,8 +269,19 @@ export default function CloseAppointment() {
       reasonOptions: CANCEL_REASONS,
     });
     if (!reason) return;
+    setSaving(true);
     try {
       await apptRepo.update(appt.id, { status: "cancelled", cancelReason: reason });
+    } catch (e) {
+      setSaving(false);
+      await confirmDialog({
+        title: "שגיאה",
+        message: "ביטול התור נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
+    try {
       await log({
         action: "appointment_cancel",
         entity: {
@@ -267,13 +294,9 @@ export default function CloseAppointment() {
         after: { cancelReason: reason },
       });
     } catch (e) {
-      await confirmDialog({
-        title: "שגיאה",
-        message: "ביטול התור נכשל: " + (e?.message || e),
-        alertOnly: true,
-      });
-      return;
+      console.error("[audit] appointment_cancel failed", e);
     }
+    toast.showMessage("התור בוטל");
     navigate(backTo);
   }
 
@@ -311,7 +334,7 @@ export default function CloseAppointment() {
             ולא ייצור הכנסה חדשה.
           </div>
           <div className="save-row" style={{ justifyContent: "space-between" }}>
-            <button className="btn btn--danger" onClick={cancelAppt}>
+            <button className="btn btn--danger" disabled={saving} onClick={cancelAppt}>
               ביטול תור (לא בוצע)
             </button>
             <button className="btn" disabled={saving} onClick={confirmFromPackage}>
@@ -380,7 +403,7 @@ export default function CloseAppointment() {
           </div>
 
           <div className="save-row" style={{ justifyContent: "space-between" }}>
-            <button className="btn btn--danger" onClick={cancelAppt}>
+            <button className="btn btn--danger" disabled={saving} onClick={cancelAppt}>
               ביטול תור (לא בוצע)
             </button>
             <button

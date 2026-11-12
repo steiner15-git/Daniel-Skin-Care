@@ -5,6 +5,7 @@ import DiagnosisForm from "./DiagnosisForm";
 import { useCollectionData, useRepo, useAuditLog } from "../../data";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
 import { fullName, ageFromBirthday } from "./clientUtils";
+import { goBackOr } from "../../utils/nav";
 
 export default function ClientDiagnosis() {
   const { id } = useParams();
@@ -42,7 +43,7 @@ export default function ClientDiagnosis() {
         action: "client_diagnosis_edit",
         entity: { type: "client", id, desc: fullName(client) },
       });
-      navigate(`/clients/${id}`);
+      goBackOr(navigate, `/clients/${id}`);
     } catch (e) {
       setSaving(false);
       await confirmDialog({
@@ -60,7 +61,7 @@ export default function ClientDiagnosis() {
       <ScreenHeader
         title="עריכת אבחון עור"
         action={
-          <button className="btn btn--ghost" onClick={() => navigate(`/clients/${id}`)}>
+          <button className="btn btn--ghost" onClick={() => goBackOr(navigate, `/clients/${id}`)}>
             ביטול
           </button>
         }
@@ -74,7 +75,7 @@ export default function ClientDiagnosis() {
       <DiagnosisForm value={draft} onChange={setDraft} />
 
       <div className="save-row">
-        <button className="btn btn--muted" onClick={() => navigate(`/clients/${id}`)}>
+        <button className="btn btn--muted" onClick={() => goBackOr(navigate, `/clients/${id}`)}>
           ביטול
         </button>
         <button className="btn" disabled={saving} onClick={save}>

@@ -27,7 +27,8 @@ export default function SendInvite() {
   const appt = appts.find((a) => a.id === id);
 
   function goBack() {
-    navigate(from === "appointments" ? "/appointments" : "/calendar");
+    if (from === "appointments") navigate("/appointments");
+    else navigate(appt ? `/calendar?date=${String(appt.start).slice(0, 10)}` : "/calendar");
   }
 
   if (loading) return <p className="muted">טוען…</p>;
@@ -39,16 +40,16 @@ export default function SendInvite() {
       </>
     );
 
-  // Phase 4 §7 — טלפון: ללקוחה קיימת נשאב מכרטיס הלקוחה (הוא לא נשמר על
-  // רשומת התור עבור לקוחה קיימת); ללקוחה שהוזנה ידנית appt.phone כבר מכיל
-  // אותו ישירות (ראו AppointmentForm.jsx).
+  // טלפון ואימייל: ללקוחה קיימת נשאבים מכרטיס הלקוחה (הם לא נשמרים על רשומת
+  // התור עבור לקוחה קיימת, ועשויים להתווסף לכרטיסייה אחרי קביעת התור); ללקוחה
+  // שהוזנה ידנית appt.phone/appt.email מכילים אותם ישירות (ראו AppointmentForm).
   const client = appt.clientId ? clients.find((c) => c.id === appt.clientId) : null;
   const phone = client?.phone || appt.phone || "";
+  const email = client?.email || appt.email || "";
 
   const tokens = inviteTokens({ business, clientName: appt.clientName, appt });
-  // אם מסך ההגדרות "תוכן זימון" מעולם לא נשמר בפועל (המסמך לא קיים ב-Firestore),
-  // invitation?.subject/body הם undefined — נופלים לברירת מחדל מלאה בקוד, כדי
-  // שהמייל תמיד יכלול את כל פרטי התור ולא רק את הקישור ליומן.
+  // אם מסך ההגדרות "תוכן זימון" מעולם לא נשמר בפועל, נופלים לברירת מחדל מלאה
+  // בקוד, כדי שהמייל תמיד יכלול את כל פרטי התור ולא רק את הקישור ליומן.
   const subject = fillTemplate(invitation?.subject || DEFAULT_INVITATION_SUBJECT, tokens);
   const baseBody = fillTemplate(invitation?.body || DEFAULT_INVITATION_BODY, tokens);
 
@@ -66,11 +67,10 @@ export default function SendInvite() {
   const body = `${baseBody}\n\nלהוספת התור ליומן שלך:\n${calendarLink}`;
 
   function openMail() {
-    const url = mailtoUrl(appt.email, subject, body);
+    const url = mailtoUrl(email, subject, body);
     // פתיחה דרך אלמנט <a> זמני + click(), במקום window.location.href ישירות.
     // עוקף בעיה ידועה ב-PWA/WebView באנדרואיד: ניווט ישיר ל-mailto: דרך
-    // location.href לפעמים "בולע" את פרמטרי ה-subject/body ומעביר לאפליקציית
-    // המייל רק את כתובת הנמען, בלי כותרת ותוכן.
+    // location.href לפעמים "בולע" את פרמטרי ה-subject/body.
     const link = document.createElement("a");
     link.href = url;
     link.rel = "noopener";
@@ -80,8 +80,7 @@ export default function SendInvite() {
     repo.update(appt.id, { inviteSent: true });
   }
 
-  // Phase 4 §7 — פתיחת wa.me בכרטיסייה/חלון חדש (לא ניווט ישיר בעמוד
-  // הנוכחי) כדי לא לאבד את מסך "שליחת זימון" אם המשתמשת חוזרת אחורה.
+  // פתיחת wa.me בכרטיסייה/חלון חדש כדי לא לאבד את מסך "שליחת זימון".
   function openWhatsapp() {
     const url = whatsappUrl(phone, body);
     window.open(url, "_blank", "noopener");
@@ -114,15 +113,15 @@ export default function SendInvite() {
         </div>
         <div className="read-row">
           <span className="muted">אימייל</span>
-          <span dir="ltr">{appt.email || "— חסר —"}</span>
+          <span dir="ltr" className="sensitive">{email || "— חסר —"}</span>
         </div>
         <div className="read-row">
           <span className="muted">טלפון</span>
-          <span dir="ltr">{phone || "— חסר —"}</span>
+          <span dir="ltr" className="sensitive">{phone || "— חסר —"}</span>
         </div>
       </div>
 
-      {!appt.email && (
+      {!email && (
         <div className="warn-text" style={{ marginTop: 12 }}>
           ⚠ ללקוחה אין אימייל. הוסיפי אימייל בכרטיסיית הלקוחה כדי לשלוח זימון במייל.
         </div>
@@ -139,7 +138,7 @@ export default function SendInvite() {
       </div>
 
       <div className="stack">
-        <button className="btn btn--block" disabled={!appt.email} onClick={openMail}>
+        <button className="btn btn--block" disabled={!email} onClick={openMail}>
           ✉ פתיחת טיוטת מייל (כולל קישור ליומן)
         </button>
         <button className="btn btn--block btn--ghost" disabled={!phone} onClick={openWhatsapp}>

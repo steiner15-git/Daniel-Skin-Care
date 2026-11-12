@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useNavigationType, useSearchParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import BarChart from "../../components/BarChart";
 import { SkeletonRows } from "../../components/Skeleton";
@@ -7,6 +7,7 @@ import SummaryByProduct from "./SummaryByProduct";
 import SummaryByClient from "./SummaryByClient";
 import SummaryOverview from "./SummaryOverview";
 import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
+import { usePaymentMethods, useExpenseCategories } from "../../data/useListSettings";
 import { useVatSettings } from "../../data/useVatSettings";
 import { useReminderSettings } from "../../data/useReminderSettings";
 import { formatILS, HEB_MONTHS } from "../../utils/money";
@@ -42,6 +43,30 @@ import { useToast } from "../../context/ToastProvider";
 const CURRENT_YEAR = new Date().getFullYear();
 const CURRENT_MONTH = new Date().getMonth();
 
+// סינונים שמורים של רשימות ההכנסות/ההוצאות (sessionStorage, פר-לשונית דפדפן).
+// נשמרים בכל שינוי, ומשוחזרים רק בחזרה למסך (ניווט אחורה אחרי עריכת רשומה) —
+// לא בכניסה רגילה, שבה הרשימה נפתחת נקייה כמו תמיד. ראו Business() / restore.
+const FILTER_STORAGE_KEYS = {
+  income: "dsc:filters:income",
+  expense: "dsc:filters:expense",
+};
+
+function readSavedFilters(name) {
+  try {
+    return JSON.parse(sessionStorage.getItem(FILTER_STORAGE_KEYS[name]) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function writeSavedFilters(name, value) {
+  try {
+    sessionStorage.setItem(FILTER_STORAGE_KEYS[name], JSON.stringify(value));
+  } catch {
+    /* sessionStorage לא זמין — הסינון פשוט לא ישוחזר */
+  }
+}
+
 // Phase 4 §9 (המשך) — Business() כבר לא שואב income/expenses ברמה
 // העליונה: כל טאב (SummaryTabs/IncomeTab/ExpenseTab) שואב בעצמו, רק כל עוד
 // הוא מורכב (mounted) בפועל. לפני התיקון, שני ה-useCollectionData היו
@@ -75,8 +100,21 @@ function monthGroups(list, amountOf) {
 }
 
 export default function Business() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const navType = useNavigationType();
   const [tab, setTab] = useState(params.get("tab") || "summary");
+  // הטאב הפעיל נשמר ב-URL, כך שחזרה ממסך משני (עריכת הכנסה/הוצאה) מחזירה לאותו טאב.
+  useEffect(() => {
+    if (params.get("tab") === tab) return;
+    setParams({ tab }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // restorable: האם הרשימות משחזרות סינונים שמורים. true רק כשהמסך נפתח בחזרה
+  // (POP — ניווט אחורה, או רענון); כל פעולה יזומה (לחיצה על טאב, "דורש טיפול",
+  // drill-down) מכבה אותו, כך שהרשימה נפתחת נקייה כמו תמיד.
+  const [restorable, setRestorable] = useState(navType === "POP");
+
   // פילטרים שמגיעים מ"דורש טיפול" או מקישור עמוק (?filter=unpaid). מתאפסים
   // בלחיצה ידנית על טאב, כדי שפילטר ישן לא "ידבק" לכניסה הבאה.
   const [incomeMissing, setIncomeMissing] = useState(
@@ -88,24 +126,28 @@ export default function Business() {
   const [drill, setDrill] = useState(null);
 
   function openTab(name) {
+    setRestorable(false);
     setIncomeMissing("");
     setExpenseReceipt("");
     setDrill(null);
     setTab(name);
   }
   function goIncome(missing) {
+    setRestorable(false);
     setIncomeMissing(missing);
     setExpenseReceipt("");
     setDrill(null);
     setTab("income");
   }
   function goExpense(receipt) {
+    setRestorable(false);
     setExpenseReceipt(receipt);
     setIncomeMissing("");
     setDrill(null);
     setTab("expense");
   }
   function goDrill(d) {
+    setRestorable(false);
     setDrill(d);
     setIncomeMissing("");
     setExpenseReceipt("");
@@ -134,6 +176,7 @@ export default function Business() {
           key={incomeMissing + JSON.stringify(drill)}
           initialMissing={incomeMissing}
           initial={drill?.tab === "income" ? drill : {}}
+          restore={restorable}
         />
       )}
       {tab === "expense" && (
@@ -141,6 +184,7 @@ export default function Business() {
           key={expenseReceipt + JSON.stringify(drill)}
           initialReceipt={expenseReceipt}
           initial={drill?.tab === "expense" ? drill : {}}
+          restore={restorable}
         />
       )}
     </>
@@ -484,7 +528,14 @@ function YearScopeNav({ year, setYear, allYears, setAllYears }) {
 }
 
 /* ---------- הכנסות ---------- */
-function IncomeTab({ initialMissing = "", initial = {} }) {
+// restore: האם לשחזר סינונים שמורים (חזרה ממסך עריכה). כשיש סינונים שמורים הם
+// גוברים על initial/initialMissing שהתקבלו; אחרת הרשימה נפתחת לפי הערכים
+// שהתקבלו (drill-down / "דורש טיפול" / ברירת מחדל).
+function IncomeTab({ initialMissing: initialMissingProp = "", initial: initialProp = {}, restore = false }) {
+  const [saved] = useState(() => (restore ? readSavedFilters("income") : null));
+  const initial = saved ? { ...initialProp, ...saved } : initialProp;
+  const initialMissing = saved ? saved.missing ?? "" : initialMissingProp;
+
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
@@ -504,17 +555,17 @@ function IncomeTab({ initialMissing = "", initial = {} }) {
   const log = useAuditLog();
   const confirmDialog = useConfirm();
   const toast = useToast();
-  const { data: pmDoc } = useSettingDoc("paymentMethods");
-  const methods = pmDoc?.items ?? [];
+  // אמצעי תשלום כולל ברירות מחדל גם אם הרשימה לא נשמרה מעולם בהגדרות.
+  const { items: methods } = usePaymentMethods();
   const [q, setQ] = useState(initial.q || "");
   const [missing, setMissing] = useState(initialMissing); // "" | confirmation | invoice | both
-  const [status, setStatus] = useState(""); // "" | paid | unpaid
-  const [method, setMethod] = useState("");
+  const [status, setStatus] = useState(initial.status ?? ""); // "" | paid | unpaid
+  const [method, setMethod] = useState(initial.method ?? "");
   const [from, setFrom] = useState(initial.from || "");
   const [to, setTo] = useState(initial.to || "");
-  const [receipt, setReceipt] = useState(""); // "" | with | without
+  const [receipt, setReceipt] = useState(initial.receipt ?? ""); // "" | with | without
   const [source, setSource] = useState(initial.source || ""); // "" | appointment | series | product | voucher | manual
-  const [sortBy, setSortBy] = useState("date");
+  const [sortBy, setSortBy] = useState(initial.sortBy ?? "date");
   // Phase 4 §9 (המשך) — ברירת מחדל: השנה הנוכחית בלבד (שאילתה מוגבלת, ראו
   // useYearRangeCollectionData). "כל השנים" משחזר בדיוק את ההתנהגות
   // הקודמת (שאילתה מלאה, ללא הגבלה) — אותו מנוי משותף שגם SummaryTabs
@@ -525,7 +576,9 @@ function IncomeTab({ initialMissing = "", initial = {} }) {
   // ברירת המחדל היא "כל השנים" ולא השנה הנוכחית — אחרת הזימון הישיר
   // (deep-link) עלול "לאבד" בשקט את הרשומה שאותה בדיוק ביקשו למצוא.
   const [year, setYear] = useState(initial.year || CURRENT_YEAR);
-  const [allYears, setAllYears] = useState(initialMissing === "confirmation" || initialMissing === "both");
+  const [allYears, setAllYears] = useState(
+    initial.allYears ?? (initialMissing === "confirmation" || initialMissing === "both")
+  );
   const { items: income, loading } = useYearRangeCollectionData(
     "income",
     "date",
@@ -534,6 +587,13 @@ function IncomeTab({ initialMissing = "", initial = {} }) {
   // הכנסות שנמחקו אופטימית ל-Undo (רק מחיקות "פשוטות" ללא side-effects —
   // ראו remove() למטה. ראו ToastProvider).
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
+
+  // שמירת הסינונים לשחזור בחזרה ממסך עריכה (sessionStorage).
+  useEffect(() => {
+    writeSavedFilters("income", {
+      q, missing, status, method, from, to, receipt, source, sortBy, year, allYears,
+    });
+  }, [q, missing, status, method, from, to, receipt, source, sortBy, year, allYears]);
 
   const list = useMemo(() => {
     const term = q.trim();
@@ -555,9 +615,14 @@ function IncomeTab({ initialMissing = "", initial = {} }) {
     if (to) l = l.filter((r) => (r.date || "") <= to);
     if (receipt === "with") l = l.filter(hasReceipt);
     else if (receipt === "without") l = l.filter((r) => !hasReceipt(r));
-    if (missing === "confirmation") l = l.filter((r) => !r.paid);
-    else if (missing === "invoice") l = l.filter((r) => !r.invoiceNumber);
-    else if (missing === "both") l = l.filter((r) => !r.paid && !r.invoiceNumber);
+    // הכנסה בסכום ₪0 (קיזוז מיתרה / חבילה) לא דורשת תשלום ולא חשבונית — אינה
+    // נכללת בסינוני "חסר ...". "חסר אישור תשלום" מציג את כל מה שטרם אומת, גם אם
+    // טרם עבר מספר הימים של התזכורת (הספירה בבאדג' נשארת לפי הסף).
+    const hasAmount = (r) => (Number(r.amount) || 0) > 0;
+    const noInvoice = (r) => !String(r.invoiceNumber || "").trim();
+    if (missing === "confirmation") l = l.filter((r) => hasAmount(r) && !r.paid);
+    else if (missing === "invoice") l = l.filter((r) => hasAmount(r) && noInvoice(r));
+    else if (missing === "both") l = l.filter((r) => hasAmount(r) && !r.paid && noInvoice(r));
     l.sort((a, b) => {
       if (sortBy === "amount") return (Number(b.amount) || 0) - (Number(a.amount) || 0);
       if (sortBy === "method") return (a.paymentMethod || "").localeCompare(b.paymentMethod || "", "he");
@@ -568,13 +633,28 @@ function IncomeTab({ initialMissing = "", initial = {} }) {
 
   async function togglePaid(r) {
     const paid = !r.paid;
-    await repo.update(r.id, { paid });
-    await log({
-      action: paid ? "income_mark_paid" : "income_unmark_paid",
-      entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
-      before: { paid: r.paid },
-      after: { paid },
-    });
+    try {
+      await repo.update(r.id, { paid });
+    } catch (e) {
+      await confirmDialog({
+        title: "שגיאה",
+        message: "עדכון סטטוס התשלום נכשל: " + (e?.message || e),
+        alertOnly: true,
+      });
+      return;
+    }
+    // כשל בלוג אחרי שהעדכון הצליח לא אמור להציג "העדכון נכשל".
+    try {
+      await log({
+        action: paid ? "income_mark_paid" : "income_unmark_paid",
+        entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
+        before: { paid: r.paid },
+        after: { paid },
+      });
+    } catch (e) {
+      console.error("[audit] income paid toggle failed", e);
+    }
+    toast.showMessage(paid ? "סומן כשולם ✓" : "סימון התשלום הוסר");
   }
 
   // מחיקת הכנסה משויכת לתור/סדרה/מכירת מוצר/שובר עלולה להשאיר "יתום" (ביומן,
@@ -953,7 +1033,12 @@ function IncomeTab({ initialMissing = "", initial = {} }) {
 }
 
 /* ---------- הוצאות ---------- */
-function ExpenseTab({ initialReceipt = "", initial = {} }) {
+// restore: ראו הערה ב-IncomeTab.
+function ExpenseTab({ initialReceipt: initialReceiptProp = "", initial: initialProp = {}, restore = false }) {
+  const [saved] = useState(() => (restore ? readSavedFilters("expense") : null));
+  const initial = saved ? { ...initialProp, ...saved } : initialProp;
+  const initialReceipt = saved ? saved.receipt ?? "" : initialReceiptProp;
+
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("expenses");
@@ -961,19 +1046,19 @@ function ExpenseTab({ initialReceipt = "", initial = {} }) {
   const log = useAuditLog();
   const confirmDialog = useConfirm();
   const toast = useToast();
-  const { data: catDoc } = useSettingDoc("expenseCategories");
-  const categories = catDoc?.items ?? [];
+  // קטגוריות כולל ברירות מחדל גם אם הרשימה לא נשמרה מעולם בהגדרות.
+  const { items: categories } = useExpenseCategories();
   const [q, setQ] = useState(initial.q || "");
   const [category, setCategory] = useState(initial.category || "");
   const [from, setFrom] = useState(initial.from || "");
   const [to, setTo] = useState(initial.to || "");
   const [receipt, setReceipt] = useState(initialReceipt); // "" | with | without
-  const [sortBy, setSortBy] = useState("date");
+  const [sortBy, setSortBy] = useState(initial.sortBy ?? "date");
   // Phase 4 §9 (המשך) — ראו הערה מקבילה ב-IncomeTab. אין כאן deep-link
   // "unpaid" מקביל (הוצאות אינן נזקקות לאימות תשלום), ולכן אין חריג כמו
   // ב-IncomeTab — ברירת המחדל היא תמיד השנה הנוכחית.
   const [year, setYear] = useState(initial.year || CURRENT_YEAR);
-  const [allYears, setAllYears] = useState(false);
+  const [allYears, setAllYears] = useState(initial.allYears ?? false);
   const { items: expenses, loading } = useYearRangeCollectionData(
     "expenses",
     "date",
@@ -981,6 +1066,11 @@ function ExpenseTab({ initialReceipt = "", initial = {} }) {
   );
   // הוצאות שנמחקו אופטימית ל-Undo (ראו ToastProvider).
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
+
+  // שמירת הסינונים לשחזור בחזרה ממסך עריכה (sessionStorage).
+  useEffect(() => {
+    writeSavedFilters("expense", { q, category, from, to, receipt, sortBy, year, allYears });
+  }, [q, category, from, to, receipt, sortBy, year, allYears]);
 
   const list = useMemo(() => {
     const term = q.trim();

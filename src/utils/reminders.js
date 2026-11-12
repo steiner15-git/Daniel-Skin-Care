@@ -20,6 +20,8 @@ export function pendingClosureAppts(appts, now = Date.now()) {
 export function unverifiedIncome(income, verifDays, now = Date.now()) {
   return income.filter((r) => {
     if (r.paid) return false;
+    // הכנסה בסכום ₪0 (קיזוז מיתרה/חבילה) לא דורשת תשלום.
+    if (!(Number(r.amount) > 0)) return false;
     const age = (now - new Date(r.date).getTime()) / 86400000;
     return age >= verifDays;
   });

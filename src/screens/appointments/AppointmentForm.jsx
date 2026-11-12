@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ScreenHeader from "../../components/ScreenHeader";
 import TimeField from "../../components/TimeField";
 import {
@@ -10,6 +10,7 @@ import {
 import { fullName } from "../clients/clientUtils";
 import { combine, overlaps, weekday, formatTime, dateInputValue } from "../../utils/datetime";
 import { useConfirm } from "../../context/ConfirmDialogProvider";
+import { useToast } from "../../context/ToastProvider";
 
 const DAY_NAMES = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
@@ -22,6 +23,7 @@ export default function AppointmentForm() {
   const { id } = useParams();
   const isEdit = !!id;
   const navigate = useNavigate();
+  const location = useLocation();
 
   const { items: clients } = useCollectionData("clients");
   const { items: appts } = useCollectionData("appointments");
@@ -32,6 +34,7 @@ export default function AppointmentForm() {
   const { data: hoursDoc } = useSettingDoc("workingHours");
   const treatments = treatmentsDoc?.items ?? [];
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const editing = isEdit ? appts.find((a) => a.id === id) : null;
   const locked = editing && (editing.status === "done" || editing.incomeId);
@@ -239,6 +242,7 @@ export default function AppointmentForm() {
       });
       return;
     }
+    toast.showMessage(isEdit ? "התור עודכן ✓" : "התור נשמר ✓");
 
     // Phase 4 §7 — ניווט אוטומטי למסך "שליחת זימון" אם התבקש זימון
     // באימייל ו/או בוואטסאפ (שני הכפתורים מוצגים שם לפי מה שזמין ללקוחה,
@@ -248,7 +252,7 @@ export default function AppointmentForm() {
         replace: true,
         state: { from: isEdit ? "calendar" : "appointments" },
       });
-    else navigate("/calendar", { replace: true });
+    else navigate(location.state?.returnTo || `/calendar?date=${form.date}`, { replace: true });
   }
 
   if (isEdit && !editing)

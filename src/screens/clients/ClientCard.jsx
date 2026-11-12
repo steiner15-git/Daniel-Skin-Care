@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
+import { useNavigate, useParams, useLocation, useSearchParams, Link } from "react-router-dom";
+import { goBackOr } from "../../utils/nav";
 import { where } from "firebase/firestore";
 import ScreenHeader from "../../components/ScreenHeader";
 import PaymentBadge from "../../components/PaymentBadge";
@@ -53,7 +54,13 @@ export default function ClientCard() {
   const client = clients.find((c) => c.id === id);
   // תמיכה בקפיצה ישירה לטאב מסוים (למשל מטאב "רכישות"/"מכירות" ברשימות
   // הסדרות/מוצרים, addendum #13/#14) — location.state.tab, ברירת מחדל "details".
-  const [tab, setTab] = useState(location.state?.tab || "details");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get("tab") || location.state?.tab || "details");
+  // הטאב נשמר ב-URL (replace), כך שחזרה למסך (למשל אחרי עריכת הכנסה) מחזירה לאותו טאב.
+  function changeTab(key) {
+    setTab(key);
+    setSearchParams({ tab: key }, { replace: true });
+  }
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -136,7 +143,7 @@ export default function ClientCard() {
       <ScreenHeader
         title={fullName(client)}
         action={
-          <button className="btn btn--ghost" onClick={() => navigate("/clients")}>
+          <button className="btn btn--ghost" onClick={() => goBackOr(navigate, "/clients")}>
             חזרה
           </button>
         }
@@ -147,7 +154,7 @@ export default function ClientCard() {
           <button
             key={t.key}
             className={"tab" + (tab === t.key ? " tab--on" : "")}
-            onClick={() => setTab(t.key)}
+            onClick={() => changeTab(t.key)}
           >
             {t.label}
           </button>
@@ -1011,7 +1018,9 @@ function ApptList({ list, incomeById = {}, showStatus = false }) {
                       className="badge badge--pending badge--btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        navigate(`/appointments/${a.id}/close`, { state: { from: "clientCard" } });
+                        navigate(`/appointments/${a.id}/close`, {
+                          state: { from: "clientCard", returnTo: `/clients/${a.clientId}?tab=appointments` },
+                        });
                       }}
                     >
                       ממתין לסגירה

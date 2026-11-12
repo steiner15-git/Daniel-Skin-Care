@@ -106,7 +106,7 @@ function DefinitionsTab() {
     }
     setDraft(EMPTY);
     setAdding(false);
-    }
+  }
   function startEdit(s) {
     setEditId(s.id);
     setEditDraft({
@@ -183,7 +183,8 @@ function DefinitionsTab() {
                 <div className="list-item__main">
                   <strong>{s.name}</strong>
                   <span className="muted">
-                    {s.treatmentName} · {s.sessions} מפגשים · {formatILS(s.price)}
+                    {s.treatmentName} · {s.sessions} מפגשים ·{" "}
+                    <span className="sensitive">{formatILS(s.price)}</span>
                     {s.expiryDate ? ` · בתוקף עד ${s.expiryDate}` : ""}
                   </span>
                 </div>
@@ -465,13 +466,23 @@ function PurchasesTab({ initialExpiringOnly = false }) {
         <div className="list">
           {list.map((p) => {
             const inc = p.incomeId ? incomeById[p.incomeId] : null;
+            const openClient = () =>
+              navigate(`/clients/${p.clientId}`, { state: { tab: "appointments" } });
+            // השורה היא div עם role="button" ולא <button>: בתוכה יש PaymentBadge
+            // שהוא בעצמו <button> (כפתור בתוך כפתור הוא HTML לא תקין ועלול לא
+            // לעבוד ב-iOS Safari). הבדיקה e.target === e.currentTarget מונעת
+            // מ-Enter על התגית הפנימית להפעיל גם את ניווט השורה.
             return (
-              <button
+              <div
                 key={p.id}
                 className="card list-item as-button"
-                onClick={() =>
-                  navigate(`/clients/${p.clientId}`, { state: { tab: "appointments" } })
-                }
+                role="button"
+                tabIndex={0}
+                onClick={openClient}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter") openClient();
+                }}
               >
                 <div className="list-item__main">
                   <strong>
@@ -485,7 +496,7 @@ function PurchasesTab({ initialExpiringOnly = false }) {
                   </span>
                 </div>
                 <span className="nav-card__chev">‹</span>
-              </button>
+              </div>
             );
           })}
         </div>
