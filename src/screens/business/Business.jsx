@@ -6,7 +6,14 @@ import { SkeletonRows } from "../../components/Skeleton";
 import SummaryByProduct from "./SummaryByProduct";
 import SummaryByClient from "./SummaryByClient";
 import SummaryOverview from "./SummaryOverview";
-import { useCollectionData, useYearRangeCollectionData, useRepo, useAuditLog, useSettingDoc } from "../../data";
+import {
+  useCollectionData,
+  useYearRangeCollectionData,
+  useRepo,
+  useBatchRepo,
+  useAuditLog,
+  useSettingDoc,
+} from "../../data";
 import { usePaymentMethods, useExpenseCategories } from "../../data/useListSettings";
 import { useVatSettings } from "../../data/useVatSettings";
 import { useReminderSettings } from "../../data/useReminderSettings";
@@ -539,18 +546,16 @@ function IncomeTab({ initialMissing: initialMissingProp = "", initial: initialPr
   const { enabled: clinicMode } = useClinicMode();
   const navigate = useNavigate();
   const repo = useRepo("income");
-  const apptRepo = useRepo("appointments");
-  const packageRepo = useRepo("clientPackages");
-  // תוקן QA (2026-09): productRepo + products נדרשים כדי לאפשר החזרת מלאי
-  // בעת מחיקת הכנסה ממכירת מוצר (ראו planLinkedRecords/executeLinkedRecords
-  // למטה) — לפני התיקון, מחיקת מכירה שגויה/כפולה לא הציעה כלל להחזיר את
-  // הכמות למלאי, והמלאי נשאר חסר לצמיתות עד תיקון ידני.
+  // A-07: מחיקת הכנסה יחד עם הרשומות המקושרות אליה (תור / חבילה / מלאי /
+  // יתרות זיכוי / יתרת שובר) מתבצעת ב-batch אטומי אחד (batchRepo) ולא בסדרת
+  // קריאות repo נפרדות — ראו commitDeletion למטה.
+  const batchRepo = useBatchRepo();
+  // תוקן QA (2026-09): products נדרש כדי לאפשר החזרת מלאי בעת מחיקת הכנסה
+  // ממכירת מוצר (ראו planSourceRecords/commitDeletion למטה).
   const { items: packages } = useCollectionData("clientPackages");
   const { items: products } = useCollectionData("products");
-  const productRepo = useRepo("products");
   // שוברי מתנה (D-3): מחיקת הכנסת שובר מציעה למחוק גם את היתרה שנוצרה ממנה.
   const { items: credits } = useCollectionData("credits");
-  const creditRepo = useRepo("credits");
   const { years } = useVatSettings();
   const log = useAuditLog();
   const confirmDialog = useConfirm();
@@ -749,77 +754,106 @@ function IncomeTab({ initialMissing: initialMissingProp = "", initial: initialPr
     return plan;
   }
 
-  async function executeLinkedRecords(r, plan) {
+  // A-07 — מחיקת ההכנסה וכל הרשומות המקושרות שנבחרו בתוכנית (plan) ב-commit
+  // אטומי אחד: או שהכול הצליח (הכנסה נמחקה, מלאי/יתרות הוחזרו, תור/חבילה/
+  // יתרת שובר נמחקו) או שדבר לא השתנה. לפני התיקון, executeLinkedRecords
+  // שינה את הרשומות המקושרות אחת-אחת ורק אחר כך מחק את ההכנסה; אם מחיקת
+  // ההכנסה נכשלה, ה-Toast החזיר את הפריט למסך אבל המלאי/היתרות/החבילה כבר
+  // שונו, וניסיון חוזר העלה את המלאי פעם שנייה.
+  //
+  // כשל (רשת/quota, או update של מסמך שנמחק בין שלב השאלה לביצוע — 5 שניות
+  // של Undo) נזרק החוצה ל-ToastProvider.runExpire: הפריט חוזר למסך, והכול נשאר
+  // כפי שהיה — ניסיון חוזר בטוח. הלוגים נכתבים רק אחרי הצלחת ה-commit, והלוג
+  // אינו זורק (A-04).
+  async function commitDeletion(r, plan) {
+    const ops = [];
+    const logs = [];
+
     if (plan.deleteAppointment) {
-      try {
-        await apptRepo.remove(r.appointmentId);
-        await log({
-          action: "appointment_delete",
-          entity: {
-            type: "appointment",
-            id: r.appointmentId,
-            desc: `${r.treatmentName || "תור"}${r.clientName ? ` · ${r.clientName}` : ""}`,
-          },
-        });
-      } catch {
-        /* התור כבר לא קיים / מחיקתו נכשלה — ההכנסה עדיין תימחק */
-      }
+      ops.push({ name: "appointments", id: r.appointmentId, type: "delete" });
+      logs.push({
+        action: "appointment_delete",
+        entity: {
+          type: "appointment",
+          id: r.appointmentId,
+          desc: `${r.treatmentName || "תור"}${r.clientName ? ` · ${r.clientName}` : ""}`,
+        },
+      });
     }
+
     if (plan.deletePackage) {
       const pkg = plan.deletePackage;
-      await packageRepo.remove(pkg.id);
-      await log({
+      ops.push({ name: "clientPackages", id: pkg.id, type: "delete" });
+      logs.push({
         action: "package_delete",
         entity: { type: "clientPackage", id: pkg.id, desc: `${pkg.clientName} — ${pkg.seriesName}` },
       });
     }
+
     if (plan.restockProduct) {
       const { id: productId, qty, currentStock } = plan.restockProduct;
-      try {
-        await productRepo.update(productId, { stock: currentStock + qty });
-      } catch {
-        /* עדכון המלאי נכשל — ההכנסה עדיין תימחק; ניתן לתקן ידנית במסך המוצרים */
-      }
+      ops.push({
+        name: "products",
+        id: productId,
+        type: "update",
+        data: { stock: currentStock + qty },
+      });
     }
+
+    if (plan.deleteCredit) {
+      const credit = plan.deleteCredit;
+      ops.push({ name: "credits", id: credit.id, type: "delete" });
+      logs.push({
+        action: "credit_delete",
+        entity: { type: "credit", id: credit.id, desc: `${credit.clientName} — שובר מתנה` },
+        before: { amount: credit.amount, remaining: credit.remaining },
+      });
+    }
+
     if (plan.restoreCredits) {
+      // סכום ההחזר לכל יתרה (אם אותה יתרה מופיעה יותר מפעם אחת — מצטברת לפעולה
+      // אחת, כי שתי פעולות update על אותו מסמך באותו batch היו דורסות זו את זו).
+      const totals = new Map();
       for (const app of plan.restoreCredits) {
-        // יתרה שנמחקה בינתיים — מדלגים בלי שגיאה.
-        const credit = credits.find((c) => c.id === app.creditId);
+        totals.set(app.creditId, round2((totals.get(app.creditId) || 0) + round2(app.amount)));
+      }
+      for (const [creditId, amount] of totals) {
+        // יתרה שנמחקה בינתיים (או שנמחקת כעת יחד עם ההכנסה) — מדלגים בלי שגיאה.
+        if (plan.deleteCredit?.id === creditId) continue;
+        const credit = credits.find((c) => c.id === creditId);
         if (!credit) continue;
         const restoredTo = Math.min(
           round2(credit.amount),
-          round2(round2(credit.remaining) + round2(app.amount))
+          round2(round2(credit.remaining) + amount)
         );
-        try {
-          await creditRepo.update(credit.id, { remaining: restoredTo, status: "active" });
-          await log({
-            action: "credit_restore",
-            entity: {
-              type: "credit",
-              id: credit.id,
-              desc: `${credit.clientName} — החזרה ממחיקת ${r.treatmentName || "הכנסה"}`,
-            },
-            before: { remaining: credit.remaining },
-            after: { remaining: restoredTo },
-          });
-        } catch {
-          /* ההחזרה נכשלה — ההכנסה עדיין תימחק; ניתן לתקן ידנית בכרטיס יתרת הזיכוי */
-        }
-      }
-    }
-    if (plan.deleteCredit) {
-      const credit = plan.deleteCredit;
-      try {
-        await creditRepo.remove(credit.id);
-        await log({
-          action: "credit_delete",
-          entity: { type: "credit", id: credit.id, desc: `${credit.clientName} — שובר מתנה` },
-          before: { amount: credit.amount, remaining: credit.remaining },
+        ops.push({
+          name: "credits",
+          id: credit.id,
+          type: "update",
+          data: { remaining: restoredTo, status: "active" },
         });
-      } catch {
-        /* מחיקת היתרה נכשלה — ההכנסה עדיין תימחק; ניתן למחוק את היתרה ידנית בכרטיסיית הלקוחה */
+        logs.push({
+          action: "credit_restore",
+          entity: {
+            type: "credit",
+            id: credit.id,
+            desc: `${credit.clientName} — החזרה ממחיקת ${r.treatmentName || "הכנסה"}`,
+          },
+          before: { remaining: credit.remaining },
+          after: { remaining: restoredTo },
+        });
       }
     }
+
+    // ההכנסה עצמה — תמיד אחרונה ב-batch, באותה קבוצה אטומית.
+    ops.push({ name: "income", id: r.id, type: "delete" });
+    logs.push({
+      action: "income_delete",
+      entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
+    });
+
+    await batchRepo.commit(ops);
+    for (const entry of logs) await log(entry);
   }
 
   async function remove(r) {
@@ -845,14 +879,7 @@ function IncomeTab({ initialMissing: initialMissingProp = "", initial: initialPr
           next.delete(r.id);
           return next;
         }),
-      onExpire: async () => {
-        await executeLinkedRecords(r, plan);
-        await repo.remove(r.id);
-        await log({
-          action: "income_delete",
-          entity: { type: "income", id: r.id, desc: `${r.treatmentName || "הכנסה"} · ${formatILS(r.amount)}` },
-        });
-      },
+      onExpire: () => commitDeletion(r, plan),
     });
   }
 
