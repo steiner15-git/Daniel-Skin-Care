@@ -63,10 +63,19 @@ export function useSettingDoc(key) {
   return { data, loading: false, save };
 }
 
-// מתעלם מאילוצי שאילתה (constraints) — המסכים מסננים/ממיינים בצד הלקוח
+// כל האוסף — המסכים מסננים/ממיינים בצד הלקוח. (A-01: אין עוד פרמטר
+// constraints; שאילתות ממוקדות עוברות דרך useCollectionWhere.)
 export function useCollectionData(name) {
   useBus();
   return { items: readColl(name), loading: false };
+}
+
+// A-01 — מקביל ל-useCollectionWhere של firestore.js: שאילתת שוויון על שדה
+// בודד (field === value), מסוננת בזיכרון. מכיוון שהקריאה מתבצעת מחדש בכל
+// רינדור, שינוי ב-value משתקף מיד, בלי מצב ביניים.
+export function useCollectionWhere(name, field, value) {
+  useBus();
+  return { items: readColl(name).filter((r) => r[field] === value), loading: false };
 }
 
 // Phase 4 §9 — מקביל ל-useYearRangeCollectionData של firestore.js: מכיוון
@@ -133,6 +142,10 @@ export function useRepo(name) {
 // כבר "אטומיות" (אין נקודת כשל חלקי אפשרית בין הפעולות). למרות זאת נשמר
 // אותו ה-API בדיוק (newId/commit) כדי ששני ה-backends יישארו אגנוסטיים
 // זה לזה עבור המסכים הקוראים (ProductSell.jsx, SeriesPurchase.jsx).
+//
+// הערה ידועה: בסוף ה-commit כל קולקציה נכתבת בנפרד ל-localStorage; חריגה
+// ממכסת האחסון (QuotaExceededError) באמצע עלולה להשאיר מצב חלקי. מצב מקומי
+// הוא תצוגה/פיתוח בלבד, ולכן התקבל כמגבלה ידועה.
 export function useBatchRepo() {
   return {
     newId() {
@@ -145,11 +158,28 @@ export function useBatchRepo() {
       for (const op of ops) {
         if (!byCollection.has(op.name)) byCollection.set(op.name, readColl(op.name));
         const arr = byCollection.get(op.name);
-        if (op.type === "update") {
+        if (op.type === "delete") {
+          // A-07: מחיקה לפי מזהה (מקביל ל-batch.delete ב-Firestore). מחליפים את
+          // המערך במפה כי filter מחזיר מערך חדש.
+          byCollection.set(
+            op.name,
+            arr.filter((x) => x.id !== op.id)
+          );
+        } else if (op.type === "update") {
           const i = arr.findIndex((x) => x.id === op.id);
           if (i >= 0) arr[i] = { ...arr[i], ...op.data, updatedAt: Date.now() };
         } else {
-          arr.push({ id: op.id, ...op.data, createdAt: Date.now(), updatedAt: Date.now() });
+          // A-05: "add" הוא upsert לפי מזהה (כמו batch.set ב-Firestore) —
+          // כתיבה חוזרת לאותו מזהה דטרמיניסטי דורסת ואינה יוצרת כפילות.
+          const i = arr.findIndex((x) => x.id === op.id);
+          const rec = {
+            id: op.id,
+            ...op.data,
+            createdAt: i >= 0 ? arr[i].createdAt : Date.now(),
+            updatedAt: Date.now(),
+          };
+          if (i >= 0) arr[i] = rec;
+          else arr.push(rec);
         }
       }
       for (const [name, arr] of byCollection.entries()) {
@@ -159,17 +189,24 @@ export function useBatchRepo() {
   };
 }
 
+// A-04: הלוג אינו זורק לעולם (ראו הסבר ב-firestore.js). מחזיר true/false.
 export function useAuditLog() {
   return async function log({ action, entity, before, after }) {
-    const arr = readColl("auditLog");
-    arr.push({
-      id: genId(),
-      ts: Date.now(),
-      action,
-      entity,
-      before: before ?? null,
-      after: after ?? null,
-    });
-    writeColl("auditLog", arr);
+    try {
+      const arr = readColl("auditLog");
+      arr.push({
+        id: genId(),
+        ts: Date.now(),
+        action,
+        entity,
+        before: before ?? null,
+        after: after ?? null,
+      });
+      writeColl("auditLog", arr);
+      return true;
+    } catch (e) {
+      console.error("[audit] write failed", action, e?.name || e?.message);
+      return false;
+    }
   };
 }

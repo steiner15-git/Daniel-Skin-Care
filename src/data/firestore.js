@@ -63,18 +63,16 @@ export function useSettingDoc(key) {
 }
 
 /* ---------- מאגר מנויים משותף (subscription pooling) ---------- */
-// כמה קומפוננטות שקוראות ל-useCollectionData(name) עבור אותה קולקציה,
-// **ללא constraints** (כלומר: "תני לי את כל האוסף, אני מסננת בזיכרון" —
-// הדפוס הדומיננטי בכל האפליקציה: appointments/income/clients/clientPackages
-// וכו' תמיד נקראים ככה, למשל BottomNav+Dashboard+SummaryTabs על אותה
-// קולקציה בו-זמנית), חולקות מאזין onSnapshot אחד במקום לפתוח מנוי עצמאי
-// כל אחת. זה מפחית משמעותית קריאות Firestore על מסלולים נפוצים (בפרט
-// BottomNav, שמחובר תמיד בכל מסך ב-AppShell וצורך appointments+income,
-// וכעת גם useAutoBackup.js שנרשם ל-4 הקולקציות המגובות, Phase 4 §8).
+// כמה קומפוננטות שקוראות ל-useCollectionData(name) עבור אותה קולקציה
+// ("תני לי את כל האוסף, אני מסננת בזיכרון" — הדפוס הדומיננטי בכל האפליקציה:
+// appointments/income/clients/clientPackages וכו', למשל BottomNav+Dashboard+
+// SummaryTabs על אותה קולקציה בו-זמנית), חולקות מאזין onSnapshot אחד במקום
+// לפתוח מנוי עצמאי כל אחת. זה מפחית משמעותית קריאות Firestore על מסלולים
+// נפוצים (בפרט BottomNav, שמחובר תמיד בכל מסך ב-AppShell וצורך appointments+
+// income, וכעת גם useAutoBackup.js שנרשם לקולקציות המגובות, Phase 4 §8).
 //
-// קריאות **עם** constraints (למשל שאילתת where ממוקדת-לקוחה ב-ClientCard)
-// אינן משתתפות במאגר המשותף — הן ממשיכות לקבל מנוי עצמאי כרגיל, כי הן
-// שאילתות ייחודיות שאין טעם/אפשרות לשתף בין קומפוננטות שונות.
+// שאילתות ממוקדות (שדה=ערך) אינן משתתפות במאגר המשותף — הן עוברות דרך
+// useCollectionWhere למטה, עם מנוי עצמאי ומפתח מפורש.
 //
 // לא React state — Map מודולרי רגיל, כדי שהמאגר ישרוד בין רינדורים/
 // קומפוננטות בלי תלות ב-Context. מנוי נסגר אוטומטית כשמספר ה-subscribers
@@ -174,40 +172,55 @@ function subscribeRangeQuery(uid, name, poolSuffix, dateField, year, timestampFi
 }
 
 /* ---------- Hook: קולקציה של ישויות ---------- */
-export function useCollectionData(name, ...constraints) {
+// תוקן QA (A-01): הפונקציה כבר לא מקבלת constraints. בגרסה הקודמת מפתח
+// ה-effect נבנה מ-JSON.stringify(constraints.map(c => c.type)) — כלומר רק
+// מסוג האילוץ ("where"), לא מהשדה/הערך. החלפת id בין שני רינדורים (אותה
+// קומפוננטה, לקוחה אחרת) לא הפעילה מחדש את המנוי, והוצגו נתוני השאילתה
+// הקודמת. שאילתות ממוקדות עברו ל-useCollectionWhere עם מפתח מפורש.
+export function useCollectionData(name) {
   const { user } = useAuth();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  // רק קריאות "מלאות" (בלי constraints) משתתפות במאגר המשותף — ראו הסבר
-  // מעל subscribeShared.
-  const poolable = constraints.length === 0;
 
   useEffect(() => {
     if (!user) return;
-
-    if (poolable) {
-      return subscribeShared(user.uid, name, (its, ld) => {
-        setItems(its);
-        setLoading(ld);
-      });
-    }
-
-    // התנהגות קיימת ללא שינוי עבור שאילתות עם constraints — מנוי עצמאי.
-    setLoading(true);
-    const q = query(collRef(user.uid, name), ...constraints);
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-        setLoading(false);
-      },
-      () => setLoading(false)
-    );
-    return unsub;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, name, poolable, JSON.stringify(constraints.map((c) => c?.type))]);
+    return subscribeShared(user.uid, name, (its, ld) => {
+      setItems(its);
+      setLoading(ld);
+    });
+  }, [user, name]);
 
   return { items, loading };
+}
+
+// תוקן QA (A-01) — שאילתת שוויון על שדה בודד (field == value), חיה, עם מפתח
+// מפורש שכולל uid+קולקציה+שדה+ערך: כל שינוי באחד מהם סוגר את המנוי הישן
+// ופותח חדש. עד שהמנוי החדש מחזיר snapshot מוחזר מצב ריק+טעינה (ולא נתוני
+// השאילתה הקודמת). החתימה היא (name, field, value) ולא אובייקט constraint,
+// כדי שמסכים לא יצטרכו לייבא דבר מ-firebase/firestore (כלל 4.4) ושמימוש
+// localStore.js יוכל להיות מקביל פשוט.
+export function useCollectionWhere(name, field, value) {
+  const { user } = useAuth();
+  const key = `${user?.uid}:${name}:${field}:${String(value)}`;
+  const [state, setState] = useState({ key: "", items: [], loading: true });
+
+  useEffect(() => {
+    if (!user || value == null) return;
+    setState({ key, items: [], loading: true });
+    return onSnapshot(
+      query(collRef(user.uid, name), where(field, "==", value)),
+      (snap) =>
+        setState({
+          key,
+          loading: false,
+          items: snap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        }),
+      () => setState((s) => ({ ...s, key, loading: false }))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  return state.key === key ? state : { items: [], loading: true };
 }
 
 // Phase 4 §9 — קולקציה מוגבלת לשנה קלנדרית בודדת (חי, onSnapshot). לשימוש
@@ -339,7 +352,13 @@ export function useRepo(name) {
 //   ]);
 // "add" כאן כותב מסמך מלא לפי מזהה שכבר נוצר מראש (במקום addDoc עם מזהה
 // אוטומטי) — כי כל הפעולות בבאטש חייבות להיות ידועות-מזהה מראש לפני commit.
-// "update" מבצע patch על מסמך קיים, באותו אופן כמו useRepo().update.
+// מכיוון ש-"add" הוא batch.set לפי מזהה, שימוש במזהה דטרמיניסטי (למשל
+// useRecurringExpenses.js, A-05) הופך אותו לאידמפוטנטי: כתיבה חוזרת לאותו מזהה
+// דורסת את אותו מסמך ואינה יוצרת כפילות.
+// "update" מבצע patch על מסמך קיים, באותו אופן כמו useRepo().update. שים לב:
+// update על מסמך שאינו קיים גורם לכשל של ה-batch כולו (וזה רצוי — לא נשארת
+// כתיבה חלקית).
+// "delete" (A-07) מוחק מסמך לפי מזהה: { name, id, type: "delete" } (ללא data).
 export function useBatchRepo() {
   const { user } = useAuth();
 
@@ -356,6 +375,10 @@ export function useBatchRepo() {
         const ref = itemRef(user.uid, op.name, op.id);
         if (op.type === "update") {
           batch.update(ref, { ...op.data, updatedAt: serverTimestamp() });
+        } else if (op.type === "delete") {
+          // A-07: מחיקה בתוך אותו batch (למשל מחיקת הכנסה יחד עם הרשומות
+          // המקושרות אליה). מחיקת מסמך שאינו קיים אינה שגיאה ב-Firestore.
+          batch.delete(ref);
         } else {
           // "add" — מזהה כבר נוצר מראש דרך newId(), כותבים מסמך מלא.
           batch.set(ref, {
@@ -371,16 +394,27 @@ export function useBatchRepo() {
 }
 
 /* ---------- לוג שינויים (Audit Log) ---------- */
+// תוקן QA (A-04): הלוג אינו זורק לעולם. הוא נקרא תמיד *אחרי* שהפעולה העיקרית
+// הצליחה, ולכן כשל בכתיבת הלוג לא אמור להפוך את הפעולה ל"נכשלה" בעיני
+// המשתמשת (מה שגרם לניסיון חוזר ולפעולה כפולה — למשל אישור מתנת הפניות
+// פעמיים). מחזיר true/false כדי שקורא שרוצה יוכל לבדוק, והכשל נרשם ל-console
+// (קוד השגיאה בלבד, בלי תוכן הרשומה).
 export function useAuditLog() {
   const { user } = useAuth();
   return async function log({ action, entity, before, after }) {
-    if (!user) return;
-    await addDoc(collRef(user.uid, "auditLog"), {
-      ts: serverTimestamp(),
-      action,
-      entity, // { type, id, desc }
-      before: before ?? null,
-      after: after ?? null,
-    });
+    if (!user) return false;
+    try {
+      await addDoc(collRef(user.uid, "auditLog"), {
+        ts: serverTimestamp(),
+        action,
+        entity, // { type, id, desc }
+        before: before ?? null,
+        after: after ?? null,
+      });
+      return true;
+    } catch (e) {
+      console.error("[audit] write failed", action, e?.code || e?.message);
+      return false;
+    }
   };
 }
